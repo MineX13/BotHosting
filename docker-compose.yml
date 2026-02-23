@@ -1,0 +1,58 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: controller-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bot_hosting
+      POSTGRES_USER: controller
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-securepassword}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U controller -d bot_hosting"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - controller-net
+
+  # ── Redis ──────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: controller-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - controller-net
+
+  # ── Bot Network (isolated bridge for hosted bots) ─────────
+  # Hosted bot containers are attached to this network
+  # at runtime by DockerService. No external access.
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  controller-net:
+    driver: bridge
+  bot-network:
+    driver: bridge
+    internal: true  # no outbound internet — bots use Discord gateway only via host

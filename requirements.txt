@@ -1,0 +1,33 @@
+# Discord Bot Hosting Controller - Dependencies
+# Python 3.11+ required
+
+# Discord
+discord.py>=2.3.0,<3.0.0
+
+# Database
+asyncpg>=0.29.0,<1.0.0
+
+# Cache / Rate Limiting
+redis[hiredis]>=5.0.0,<6.0.0
+
+# Docker
+docker>=7.0.0,<8.0.0
+
+# Cryptography
+cryptography>=42.0.0,<44.0.0
+
+# Validation & Settings
+pydantic>=2.5.0,<3.0.0
+pydantic-settings>=2.1.0,<3.0.0
+
+# HTTP client (token validation)
+aiohttp>=3.9.0,<4.0.0
+
+# Logging
+loguru>=0.7.0,<1.0.0
+
+# Performance (Linux only - install conditionally)
+# pip install uvloop  # on Linux/macOS only
+
+# Process management
+psutil>=5.9.0,<7.0.0
