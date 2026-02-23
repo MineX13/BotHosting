@@ -1,176 +1,134 @@
-# Discord Bot Hosting Controller — Deployment Guide
+# MineNodes Bot Hoster — Deployment Guide
 
-## Table of Contents
-1. [Architecture](#architecture)
-2. [Windows Development Setup](#windows-development-setup)
-3. [Ubuntu VPS Production Setup](#ubuntu-vps-production-setup)
-4. [Firewall Configuration](#firewall-configuration)
-5. [Scaling Roadmap (1000+ Users)](#scaling-roadmap)
-6. [Kubernetes Migration Plan](#kubernetes-migration-plan)
+Production deployment on a Linux VPS (no Docker required).
 
 ---
 
-## Architecture
+## Prerequisites
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                    Discord Gateway (WSS)                      │
-└─────────────────────────┬────────────────────────────────────┘
-                          │
-┌─────────────────────────▼────────────────────────────────────┐
-│               Controller Bot (discord.py)                     │
-│                                                               │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │  Commands Layer (Slash Commands)                         │  │
-│  │  ├── User Commands (create, start, stop, delete, ...)   │  │
-│  │  └── Admin Commands (stats, suspend, broadcast, ...)    │  │
-│  └──────────────────────┬──────────────────────────────────┘  │
-│                         │                                     │
-│  ┌──────────────────────▼──────────────────────────────────┐  │
-│  │  Service Layer                                           │  │
-│  │  ├── DeploymentService   (build, deploy, lifecycle)      │  │
-│  │  ├── DockerService       (container management)          │  │
-│  │  ├── EncryptionService   (AES-256-GCM tokens)           │  │
-│  │  ├── ValidationService   (ZIP, token, file checks)      │  │
-│  │  └── MonitoringService   (health, cleanup, alerts)      │  │
-│  └──────────────────────┬──────────────────────────────────┘  │
-│                         │                                     │
-│  ┌──────────────────────▼──────────────────────────────────┐  │
-│  │  Infrastructure                                          │  │
-│  │  ├── PostgreSQL (asyncpg)  — user/bot records           │  │
-│  │  ├── Redis (rate limiting, caching)                     │  │
-│  │  └── Docker Engine (container runtime)                  │  │
-│  └─────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────┘
-```
-
-**Security layers:**
-- AES-256-GCM encryption for all bot tokens
-- ZIP validation (no traversal, symlinks, or executables)
-- Non-root containers with read-only root filesystem
-- Per-user rate limiting via Redis
-- Structured logging with automatic token redaction
+| Requirement       | Version          |
+|-------------------|------------------|
+| Python            | 3.11+            |
+| PostgreSQL        | 14+              |
+| Redis             | 7+ (optional)    |
+| OS                | Ubuntu 22.04 LTS |
 
 ---
 
-## Windows Development Setup
-
-### Prerequisites
-- Python 3.11+ → https://python.org
-- Docker Desktop → https://docker.com/products/docker-desktop
-- Git → https://git-scm.com
-
-### Steps
-
-```powershell
-# 1. Navigate to controller directory
-cd "c:\VS.prog\MC\GOODCHKR\bot hosting\controller"
-
-# 2. Create and activate virtual environment
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Generate encryption key
-python -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
-# Copy the output → paste into .env as ENCRYPTION_KEY
-
-# 5. Copy .env.example to .env and fill in values
-copy .env.example .env
-# Edit .env with your Discord bot token, encryption key, etc.
-
-# 6. Start infrastructure (PostgreSQL + Redis)
-docker-compose up -d postgres redis
-
-# 7. Verify services are running
-docker-compose ps
-
-# 8. Run the controller bot
-python -m app.main
-```
-
-**Windows-specific .env values:**
-```ini
-DOCKER_HOST=npipe:////./pipe/docker_engine
-BASE_BOT_PATH=C:\bots
-```
-
----
-
-## Ubuntu VPS Production Setup
-
-### System Requirements
-- Ubuntu 22.04 LTS
-- 8GB RAM (minimum)
-- 4 CPU cores
-- 100GB SSD
-
-### Steps
+## 1. System Setup
 
 ```bash
-# 1. System updates
+# Update system
 sudo apt update && sudo apt upgrade -y
 
-# 2. Install Python 3.11+
-sudo apt install -y python3.11 python3.11-venv python3-pip
+# Install Python 3.11
+sudo apt install -y python3.11 python3.11-venv python3.11-dev python3-pip
 
-# 3. Install Docker Engine
-curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER
-# Log out and back in for group change
+# Install PostgreSQL
+sudo apt install -y postgresql postgresql-contrib
 
-# 4. Install Docker Compose (plugin)
-sudo apt install -y docker-compose-plugin
+# Install Redis (optional — enables rate limiting)
+sudo apt install -y redis-server
+sudo systemctl enable redis-server
+```
 
-# 5. Clone / upload project
+## 2. Database Setup
+
+```bash
+# Create database and user
+sudo -u postgres psql <<EOF
+CREATE USER controller WITH PASSWORD 'your_secure_password';
+CREATE DATABASE bot_hosting OWNER controller;
+GRANT ALL PRIVILEGES ON DATABASE bot_hosting TO controller;
+EOF
+```
+
+## 3. Clone & Install
+
+```bash
+# Clone the repository
 cd /opt
-sudo mkdir bot-hosting && sudo chown $USER:$USER bot-hosting
-cd bot-hosting
-# Upload or clone your controller/ directory here
+git clone https://github.com/jpn900013-maker/bot.git minenodes
+cd minenodes
 
-# 6. Setup Python environment
-cd controller
+# Create virtual environment
 python3.11 -m venv venv
 source venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
-pip install uvloop  # Linux-only performance boost
+pip install uvloop  # Linux performance boost
 
-# 7. Configure environment
-cp .env.example .env
-nano .env
-# Set these values:
-#   DISCORD_BOT_TOKEN=your_token
-#   ENCRYPTION_KEY=your_generated_key
-#   DOCKER_HOST=unix:///var/run/docker.sock
-#   BASE_BOT_PATH=/srv/bots
-#   DATABASE_URL=postgresql://controller:STRONG_PASSWORD@localhost:5432/bot_hosting
+# Install psutil for process monitoring
+pip install psutil
+```
 
-# 8. Create bot storage directory
+## 4. Configuration
+
+```bash
+# Create .env file
+cat > .env <<'EOF'
+# Discord
+DISCORD_BOT_TOKEN=your_discord_bot_token_here
+
+# Database
+DATABASE_URL=postgresql://controller:your_secure_password@localhost:5432/bot_hosting
+
+# Redis (optional)
+REDIS_URL=redis://localhost:6379/0
+
+# Encryption key (generate one with: python3 -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())")
+ENCRYPTION_KEY=your_base64_key_here
+
+# Paths
+BASE_BOT_PATH=/srv/bots
+
+# Admin
+ADMIN_USER_ID=941139424580890666
+EOF
+```
+
+**Generate encryption key:**
+```bash
+python3 -c "import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+```
+
+## 5. Initialize Database
+
+```bash
+source venv/bin/activate
+psql -U controller -d bot_hosting -f app/database/schema.sql
+```
+
+## 6. Create Bot Directory
+
+```bash
 sudo mkdir -p /srv/bots
 sudo chown $USER:$USER /srv/bots
+```
 
-# 9. Start infrastructure
-docker compose up -d
+## 7. Run (Manual)
 
-# 10. Run the bot (foreground test)
-python -m app.main
+```bash
+source venv/bin/activate
+python3 -m app.main
+```
 
-# 11. Create systemd service for production
-sudo tee /etc/systemd/system/bot-controller.service > /dev/null << 'EOF'
+## 8. Run as Systemd Service (Production)
+
+```bash
+sudo tee /etc/systemd/system/minenodes.service > /dev/null <<EOF
 [Unit]
-Description=Discord Bot Hosting Controller
-After=network.target docker.service
-Requires=docker.service
+Description=MineNodes Bot Hoster
+After=network.target postgresql.service redis-server.service
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/opt/bot-hosting/controller
-ExecStart=/opt/bot-hosting/controller/venv/bin/python -m app.main
+User=$USER
+WorkingDirectory=/opt/minenodes
+ExecStart=/opt/minenodes/venv/bin/python -m app.main
 Restart=always
-RestartSec=10
+RestartSec=5
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
@@ -178,131 +136,96 @@ WantedBy=multi-user.target
 EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable bot-controller
-sudo systemctl start bot-controller
-
-# 12. Check status
-sudo systemctl status bot-controller
-sudo journalctl -u bot-controller -f
+sudo systemctl enable minenodes
+sudo systemctl start minenodes
 ```
 
-**Linux-specific .env values:**
-```ini
-DOCKER_HOST=unix:///var/run/docker.sock
-BASE_BOT_PATH=/srv/bots
-```
-
----
-
-## Firewall Configuration
+### Service Management
 
 ```bash
-# UFW (Ubuntu)
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
+# View status
+sudo systemctl status minenodes
 
-# SSH (change port if needed)
-sudo ufw allow 22/tcp
+# View logs
+sudo journalctl -u minenodes -f
 
-# PostgreSQL — local only (DO NOT expose externally)
-# Already bound to 127.0.0.1 in docker-compose.yml
+# Restart
+sudo systemctl restart minenodes
 
-# Redis — local only
-# Already bound to 127.0.0.1 in docker-compose.yml
-
-# Enable firewall
-sudo ufw enable
-sudo ufw status verbose
+# Stop
+sudo systemctl stop minenodes
 ```
 
-**Important:** PostgreSQL and Redis are bound to `127.0.0.1` in `docker-compose.yml`. They are **never** exposed to the public internet.
+## 9. Update / Redeploy
+
+```bash
+cd /opt/minenodes
+git pull origin main
+source venv/bin/activate
+pip install -r requirements.txt
+sudo systemctl restart minenodes
+```
+
+## 10. Database Migrations
+
+When `schema.sql` changes (e.g., new columns), apply the migration on the VPS:
+
+```bash
+# Add new columns to existing users table
+sudo -u postgres psql -d bot_hosting <<EOF
+ALTER TABLE users ADD COLUMN IF NOT EXISTS max_bots INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS max_ram_mb INTEGER NOT NULL DEFAULT 512;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS max_cpu REAL NOT NULL DEFAULT 0.5;
+EOF
+```
 
 ---
 
-## Scaling Roadmap
-
-### Phase 1: Current (100 users / 300 bots)
-- Single VPS, 8GB RAM
-- Single PostgreSQL + Redis
-- Monolithic controller bot
-
-### Phase 2: Vertical Scaling (500 users)
-- Upgrade to 16-32GB RAM VPS
-- PostgreSQL connection pool tuning (increase pool size)
-- Redis maxmemory increase
-- Add swap space as safety net
-- Implement per-user disk quotas via Docker `--storage-opt`
-
-### Phase 3: Horizontal Scaling (1000+ users)
-- **Database:** PostgreSQL read replicas for queries
-- **Cache:** Redis Cluster (3-node minimum)
-- **Storage:** Shared NFS/EFS for bot files across nodes
-- **Orchestration:** Docker Swarm or Kubernetes for container scheduling
-- **Controller:** Multiple bot shards (discord.py AutoShardedBot)
-- **Load balancing:** HAProxy in front of multiple controller instances
-- **Monitoring:** Prometheus + Grafana for metrics
-
-### Phase 4: Enterprise (10,000+ users)
-- Kubernetes with Horizontal Pod Autoscaler
-- Managed PostgreSQL (RDS/Cloud SQL)
-- Managed Redis (ElastiCache/Memorystore)
-- Object storage (S3/GCS) for bot ZIPs
-- CDN for static assets
-- Stripe billing integration
-- Multi-region deployment
-
----
-
-## Kubernetes Migration Plan
-
-### Architecture
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                 Kubernetes Cluster               │
-│                                                  │
-│  ┌──────────────┐  ┌──────────────────────────┐  │
-│  │  Namespace:   │  │  Namespace:              │  │
-│  │  controller   │  │  hosted-bots             │  │
-│  │              │  │                          │  │
-│  │  Deployment  │  │  Each bot = 1 Pod        │  │
-│  │  ├── Bot     │  │  ├── Resource limits     │  │
-│  │  │   Shards  │  │  ├── Network policies    │  │
-│  │  │   (x3)    │  │  └── PVC for files       │  │
-│  │  │           │  │                          │  │
-│  │  StatefulSet │  │                          │  │
-│  │  ├── PG      │  │                          │  │
-│  │  └── Redis   │  │                          │  │
-│  └──────────────┘  └──────────────────────────┘  │
-└─────────────────────────────────────────────────┘
+Controller (Discord Bot)
+  ├── Slash Commands (user + admin)
+  ├── ProcessService (manages bot subprocesses)
+  ├── DeploymentService (deploy / update / delete)
+  ├── MonitoringService (health checks)
+  ├── PostgreSQL (bot metadata, user limits)
+  └── Redis (optional rate limiting)
+
+User Bot Flow:
+  1. User uploads ZIP + token via /create-bot
+  2. Controller extracts to /srv/bots/<user>/<bot>/
+  3. Installs dependencies (pip/npm)
+  4. Starts bot as subprocess with BOT_TOKEN env var
+  5. Monitors process health every 30s
 ```
 
-### Helm Chart Structure
+## Slash Commands
 
-```
-helm/
-├── Chart.yaml
-├── values.yaml
-├── templates/
-│   ├── controller-deployment.yaml
-│   ├── controller-service.yaml
-│   ├── postgres-statefulset.yaml
-│   ├── redis-statefulset.yaml
-│   ├── bot-network-policy.yaml
-│   ├── configmap.yaml
-│   ├── secret.yaml
-│   └── pvc.yaml
-```
+### User Commands
+| Command         | Description                          |
+|-----------------|--------------------------------------|
+| `/status`       | Ping, uptime, service info           |
+| `/help`         | Show all available commands          |
+| `/create-bot`   | Deploy a new bot from ZIP            |
+| `/list-bots`    | List your hosted bots                |
+| `/start-bot`    | Start a stopped bot                  |
+| `/stop-bot`     | Stop a running bot                   |
+| `/restart-bot`  | Restart a bot                        |
+| `/delete-bot`   | Permanently delete a bot             |
+| `/replace-files`| Upload new code for a bot            |
+| `/edit-file`    | View/edit a file in bot directory    |
+| `/view-logs`    | View bot's recent logs               |
 
-### Key Changes for K8s Migration
-1. **DockerService → KubernetesService:** Replace Docker SDK calls with Kubernetes Python client (`kubernetes` package). Each bot becomes a Pod/Deployment instead of a container.
-2. **Storage:** Replace local filesystem with PersistentVolumeClaims (PVCs) per bot.
-3. **Networking:** Use NetworkPolicies to isolate bot pods. Each bot pod gets its own network namespace.
-4. **Scaling:** Use HorizontalPodAutoscaler for the controller. Bot pods have fixed resource requests/limits.
-5. **Secrets:** Store encryption keys in Kubernetes Secrets; bot tokens stay in PostgreSQL.
-
-### Future-Ready Integrations
-- **Stripe Billing:** Add a `subscriptions` table; gate `/create-bot` on active subscription. Use Stripe Webhooks via a FastAPI sidecar.
-- **Web Dashboard:** FastAPI app sharing the same database. SSO via Discord OAuth2. Real-time logs via WebSocket proxy to container logs.
-- **Usage Metering:** Prometheus metrics per container. Store hourly CPU/RAM usage in a `usage_metrics` table for billing.
-- **Backup System:** Periodic pg_dump + tar of `/srv/bots` to S3-compatible storage.
+### Admin Commands
+| Command                | Description                          |
+|------------------------|--------------------------------------|
+| `/admin-users`         | List all registered users            |
+| `/admin-user-bots`     | View a specific user's bots          |
+| `/admin-set-limits`    | Set user resource limits             |
+| `/admin-view-limits`   | View user resource limits            |
+| `/admin-suspend-user`  | Suspend a user                       |
+| `/admin-unsuspend-user`| Unsuspend a user                     |
+| `/admin-delete-bot`    | Force-delete any bot                 |
+| `/admin-stats`         | System resource usage                |
+| `/admin-broadcast`     | DM all users                         |

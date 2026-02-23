@@ -1,5 +1,5 @@
 """
-User-facing slash commands for the bot hosting controller.
+User-facing slash commands for MineNodes Bot Hoster.
 
 Commands:
 - /create-bot — Upload ZIP + token → deploy a new bot
@@ -10,7 +10,9 @@ Commands:
 - /delete-bot — Permanently delete a bot
 - /replace-files — Upload new ZIP → rebuild bot
 - /edit-file  — Read/write a file in the bot directory
-- /view-logs  — Show last 100 lines of container logs
+- /view-logs  — Show last 100 lines of bot logs
+- /status     — Bot hoster status, ping, uptime
+- /help       — Show all available commands
 
 All commands use:
 - Rate limiting (Redis-backed)
@@ -20,6 +22,7 @@ All commands use:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import UUID
 
 import discord
@@ -28,6 +31,7 @@ from discord.ext import commands
 
 from app.commands.middleware import not_suspended, verify_bot_ownership
 from app.config.settings import get_settings
+from app.database import queries as db
 from app.services.deployment_service import DeploymentService, DeploymentError
 from app.security.rate_limiter import rate_limit_check
 from app.utils.helpers import chunk_text
@@ -42,6 +46,133 @@ class UserCommands(commands.Cog):
     def __init__(self, bot: commands.Bot, deployment_service: DeploymentService) -> None:
         self.bot = bot
         self.deploy = deployment_service
+
+    # ── /status ──────────────────────────────────────────────
+
+    @app_commands.command(
+        name="status",
+        description="View MineNodes Bot Hoster status, ping, and uptime",
+    )
+    async def status(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+
+        try:
+            # Ping
+            latency_ms = round(self.bot.latency * 1000)
+
+            # Uptime
+            boot_time = getattr(self.bot, "boot_time", None)
+            if boot_time:
+                delta = datetime.now(timezone.utc) - boot_time
+                days = delta.days
+                hours, remainder = divmod(delta.seconds, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                uptime_str = f"{days}d {hours}h {minutes}m {seconds}s"
+            else:
+                uptime_str = "N/A"
+
+            # Stats
+            stats = await db.get_stats()
+            guild_count = len(self.bot.guilds)
+
+            embed = discord.Embed(
+                title="🌐 MineNodes Bot Hoster",
+                description="Cloud bot hosting powered by MineNodes",
+                color=discord.Color.teal(),
+            )
+            embed.add_field(name="🏓 Ping", value=f"{latency_ms}ms", inline=True)
+            embed.add_field(name="⏱️ Uptime", value=uptime_str, inline=True)
+            embed.add_field(name="🌍 Servers", value=str(guild_count), inline=True)
+            embed.add_field(
+                name="🤖 Bots Hosted",
+                value=f"{stats['running_bots']} running / {stats['total_bots']} total",
+                inline=True,
+            )
+            embed.add_field(
+                name="👥 Users",
+                value=str(stats["total_users"]),
+                inline=True,
+            )
+            embed.add_field(
+                name="📡 Status",
+                value="🟢 Online" if latency_ms < 500 else "🟡 Degraded",
+                inline=True,
+            )
+            embed.set_footer(text="MineNodes Bot Hoster • Reliable 24/7 Hosting")
+
+            await interaction.followup.send(embed=embed)
+
+        except Exception as exc:
+            logger.error("Error in status", error=str(exc), exc_info=True)
+            await interaction.followup.send(
+                "❌ Failed to get status.", ephemeral=True
+            )
+
+    # ── /help ────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="help",
+        description="Show all available MineNodes Bot Hoster commands",
+    )
+    async def help_command(self, interaction: discord.Interaction) -> None:
+        embed = discord.Embed(
+            title="📖 MineNodes Bot Hoster — Commands",
+            description="Host your Discord bots with ease! Here are all available commands:",
+            color=discord.Color.blurple(),
+        )
+
+        embed.add_field(
+            name="🚀 Bot Management",
+            value=(
+                "`/create-bot` — Deploy a new bot from a ZIP file\n"
+                "`/list-bots` — List all your hosted bots\n"
+                "`/start-bot` — Start a stopped bot\n"
+                "`/stop-bot` — Stop a running bot\n"
+                "`/restart-bot` — Restart a bot\n"
+                "`/delete-bot` — Permanently delete a bot"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="📁 File Management",
+            value=(
+                "`/replace-files` — Upload new code to an existing bot\n"
+                "`/edit-file` — View or edit a file in your bot's directory"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="📋 Information",
+            value=(
+                "`/view-logs` — View your bot's recent logs\n"
+                "`/status` — Service status, ping, and uptime\n"
+                "`/help` — Show this help message"
+            ),
+            inline=False,
+        )
+
+        # Show admin commands if the user is admin
+        settings = get_settings()
+        if interaction.user.id == settings.admin_user_id:
+            embed.add_field(
+                name="🔒 Admin Commands",
+                value=(
+                    "`/admin-users` — List all registered users\n"
+                    "`/admin-user-bots` — View a user's bots\n"
+                    "`/admin-set-limits` — Set user resource limits\n"
+                    "`/admin-view-limits` — View user resource limits\n"
+                    "`/admin-suspend-user` — Suspend a user\n"
+                    "`/admin-unsuspend-user` — Unsuspend a user\n"
+                    "`/admin-delete-bot` — Force-delete any bot\n"
+                    "`/admin-stats` — System resource usage\n"
+                    "`/admin-broadcast` — DM all users"
+                ),
+                inline=False,
+            )
+
+        embed.set_footer(text="MineNodes Bot Hoster • /status for service info")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /create-bot ──────────────────────────────────────────
 
@@ -135,8 +266,6 @@ class UserCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            from app.database import queries as db
-
             bots = await db.list_user_bots(interaction.user.id)
 
             if not bots:

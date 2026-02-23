@@ -1,1 +1,1 @@
-# Discord Bot Hosting Controller
+# MineNodes Bot Hoster

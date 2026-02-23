@@ -1,5 +1,5 @@
 """
-Discord Bot Hosting Controller — Main Entrypoint
+MineNodes Bot Hoster — Main Entrypoint
 
 Initialises:
 1. Logging (loguru + token redaction)
@@ -21,6 +21,7 @@ import asyncio
 import platform
 import signal
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import discord
@@ -55,7 +56,7 @@ async def main() -> None:
     setup_logging(level=settings.log_level, log_file=settings.log_file)
     logger = get_logger("main")
     logger.info(
-        "Starting Bot Hosting Controller",
+        "Starting MineNodes Bot Hoster",
         platform=platform.system(),
         python=sys.version,
     )
@@ -110,6 +111,7 @@ async def main() -> None:
     # Inject services into bot for cog access
     bot.deployment_service = deployment_service  # type: ignore[attr-defined]
     bot.monitoring_service = monitoring_service  # type: ignore[attr-defined]
+    bot.boot_time = datetime.now(timezone.utc)   # type: ignore[attr-defined]
 
     @bot.event
     async def on_ready():

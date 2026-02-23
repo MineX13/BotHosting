@@ -1,7 +1,7 @@
 """
-Admin-only slash commands for the bot hosting controller.
+Admin-only slash commands for MineNodes Bot Hoster.
 
-Only accessible by ADMIN_USER_ID (941139424580890666).
+Only accessible by ADMIN_USER_ID.
 
 Commands:
 - /admin-users         — List all users with bot counts
@@ -9,6 +9,8 @@ Commands:
 - /admin-suspend-user  — Suspend a user (stops all bots)
 - /admin-unsuspend-user — Unsuspend a user
 - /admin-delete-bot    — Force-delete any bot
+- /admin-set-limits    — Set per-user resource limits (bots, RAM, CPU)
+- /admin-view-limits   — View a user's current resource limits
 - /admin-stats         — System resource usage
 - /admin-broadcast     — Send a DM to all users
 """
@@ -73,7 +75,8 @@ class AdminCommands(commands.Cog):
                 embed.add_field(
                     name=f"User {user['id']}",
                     value=(
-                        f"**Bots:** {user['bot_count']}\n"
+                        f"**Bots:** {user['bot_count']}/{user['max_bots']}\n"
+                        f"**RAM:** {user['max_ram_mb']}MB | **CPU:** {user['max_cpu']}\n"
                         f"**Status:** {status}\n"
                         f"**Joined:** {user['created_at'].strftime('%Y-%m-%d')}"
                     ),
@@ -262,6 +265,124 @@ class AdminCommands(commands.Cog):
                 "❌ Failed to delete bot.", ephemeral=True
             )
 
+    # ── /admin-set-limits ────────────────────────────────────
+
+    @app_commands.command(
+        name="admin-set-limits",
+        description="[ADMIN] Set per-user resource limits (bots, RAM, CPU)",
+    )
+    @app_commands.describe(
+        user_id="Discord user ID to configure",
+        max_bots="Max bots allowed (e.g. 5)",
+        max_ram_mb="Max RAM per bot in MB (e.g. 1024)",
+        max_cpu="Max CPU per bot (e.g. 1.0 = 1 core)",
+    )
+    @is_admin()
+    async def admin_set_limits(
+        self,
+        interaction: discord.Interaction,
+        user_id: str,
+        max_bots: int = None,
+        max_ram_mb: int = None,
+        max_cpu: float = None,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            uid = int(user_id)
+
+            if max_bots is None and max_ram_mb is None and max_cpu is None:
+                await interaction.followup.send(
+                    "❌ Provide at least one limit to set (max_bots, max_ram_mb, or max_cpu).",
+                    ephemeral=True,
+                )
+                return
+
+            # Validate ranges
+            if max_bots is not None and max_bots < 1:
+                await interaction.followup.send("❌ max_bots must be ≥ 1.", ephemeral=True)
+                return
+            if max_ram_mb is not None and max_ram_mb < 64:
+                await interaction.followup.send("❌ max_ram_mb must be ≥ 64.", ephemeral=True)
+                return
+            if max_cpu is not None and max_cpu <= 0:
+                await interaction.followup.send("❌ max_cpu must be > 0.", ephemeral=True)
+                return
+
+            # Ensure user exists first
+            await db.ensure_user(uid)
+
+            updated = await db.update_user_limits(
+                user_id=uid,
+                max_bots=max_bots,
+                max_ram_mb=max_ram_mb,
+                max_cpu=max_cpu,
+            )
+
+            embed = discord.Embed(
+                title=f"⚙️ Limits Updated — User {user_id}",
+                color=discord.Color.green(),
+            )
+            embed.add_field(name="🤖 Max Bots", value=str(updated["max_bots"]), inline=True)
+            embed.add_field(name="🧠 Max RAM", value=f"{updated['max_ram_mb']} MB", inline=True)
+            embed.add_field(name="⚡ Max CPU", value=str(updated["max_cpu"]), inline=True)
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except ValueError:
+            await interaction.followup.send("❌ Invalid user ID.", ephemeral=True)
+        except Exception as exc:
+            logger.error("Error in admin_set_limits", error=str(exc), exc_info=True)
+            await interaction.followup.send("❌ Failed to set limits.", ephemeral=True)
+
+    # ── /admin-view-limits ───────────────────────────────────
+
+    @app_commands.command(
+        name="admin-view-limits",
+        description="[ADMIN] View a user's current resource limits",
+    )
+    @app_commands.describe(user_id="Discord user ID to view")
+    @is_admin()
+    async def admin_view_limits(
+        self,
+        interaction: discord.Interaction,
+        user_id: str,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            uid = int(user_id)
+            limits = await db.get_user_limits(uid)
+            bot_count = await db.count_user_bots(uid)
+
+            embed = discord.Embed(
+                title=f"📋 Resource Limits — User {user_id}",
+                color=discord.Color.blue(),
+            )
+            embed.add_field(
+                name="🤖 Bots",
+                value=f"{bot_count}/{limits['max_bots']} used",
+                inline=True,
+            )
+            embed.add_field(
+                name="🧠 Max RAM / Bot",
+                value=f"{limits['max_ram_mb']} MB",
+                inline=True,
+            )
+            embed.add_field(
+                name="⚡ Max CPU / Bot",
+                value=str(limits["max_cpu"]),
+                inline=True,
+            )
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except ValueError:
+            await interaction.followup.send("❌ Invalid user ID.", ephemeral=True)
+        except Exception as exc:
+            logger.error("Error in admin_view_limits", error=str(exc), exc_info=True)
+            await interaction.followup.send("❌ Failed to view limits.", ephemeral=True)
+
     # ── /admin-stats ─────────────────────────────────────────
 
     @app_commands.command(
@@ -345,7 +466,7 @@ class AdminCommands(commands.Cog):
                 color=discord.Color.orange(),
             )
             embed.set_footer(
-                text=f"From {interaction.user.display_name} — Bot Hosting Controller"
+                text=f"From {interaction.user.display_name} — MineNodes Bot Hoster"
             )
 
             for user_record in users:

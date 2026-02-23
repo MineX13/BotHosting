@@ -98,10 +98,11 @@ class DeploymentService:
             name = bot_info.get("username", f"bot_{user_id}")
 
         # ── Step 3: Check user limits ────────────────────────
+        user_limits = await db.get_user_limits(user_id)
         bot_count = await db.count_user_bots(user_id)
-        if bot_count >= settings.max_bots_per_user:
+        if bot_count >= user_limits["max_bots"]:
             raise DeploymentError(
-                f"Bot limit reached ({settings.max_bots_per_user}). "
+                f"Bot limit reached ({user_limits['max_bots']}). "
                 "Delete an existing bot before creating a new one."
             )
 

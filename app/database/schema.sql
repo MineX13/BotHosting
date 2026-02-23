@@ -1,5 +1,5 @@
 -- ============================================================
--- Discord Bot Hosting Controller — PostgreSQL Schema
+-- MineNodes Bot Hoster — PostgreSQL Schema
 -- ============================================================
 -- Run once on fresh database. Idempotent (IF NOT EXISTS).
 -- ============================================================
@@ -22,6 +22,9 @@ END $$;
 CREATE TABLE IF NOT EXISTS users (
     id              BIGINT PRIMARY KEY,          -- Discord user ID
     suspended       BOOLEAN NOT NULL DEFAULT FALSE,
+    max_bots        INTEGER NOT NULL DEFAULT 3,  -- Max bots allowed
+    max_ram_mb      INTEGER NOT NULL DEFAULT 512,-- Max RAM per bot (MB)
+    max_cpu         REAL NOT NULL DEFAULT 0.5,   -- Max CPU per bot
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

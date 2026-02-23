@@ -85,6 +85,57 @@ async def list_all_users() -> List[asyncpg.Record]:
         )
 
 
+async def update_user_limits(
+    user_id: int,
+    max_bots: Optional[int] = None,
+    max_ram_mb: Optional[int] = None,
+    max_cpu: Optional[float] = None,
+) -> asyncpg.Record:
+    """Update per-user resource limits. Only updates non-None values."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        # Build SET clause dynamically
+        sets = []
+        params = []
+        idx = 1
+
+        if max_bots is not None:
+            sets.append(f"max_bots = ${idx}")
+            params.append(max_bots)
+            idx += 1
+        if max_ram_mb is not None:
+            sets.append(f"max_ram_mb = ${idx}")
+            params.append(max_ram_mb)
+            idx += 1
+        if max_cpu is not None:
+            sets.append(f"max_cpu = ${idx}")
+            params.append(max_cpu)
+            idx += 1
+
+        if not sets:
+            return await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
+
+        params.append(user_id)
+        query = f"UPDATE users SET {', '.join(sets)} WHERE id = ${idx} RETURNING *"
+        row = await conn.fetchrow(query, *params)
+
+    logger.info("User limits updated", user_id=user_id,
+                max_bots=max_bots, max_ram_mb=max_ram_mb, max_cpu=max_cpu)
+    return row  # type: ignore[return-value]
+
+
+async def get_user_limits(user_id: int) -> Dict[str, Any]:
+    """Get per-user resource limits. Falls back to defaults if user not found."""
+    user = await get_user(user_id)
+    if user is None:
+        return {"max_bots": 3, "max_ram_mb": 512, "max_cpu": 0.5}
+    return {
+        "max_bots": user["max_bots"],
+        "max_ram_mb": user["max_ram_mb"],
+        "max_cpu": user["max_cpu"],
+    }
+
+
 # =====================================================================
 # BOT QUERIES
 # =====================================================================
