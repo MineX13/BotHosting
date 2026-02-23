@@ -485,8 +485,85 @@ class AdminCommands(commands.Cog):
         except Exception as exc:
             logger.error("Error in admin_broadcast", error=str(exc), exc_info=True)
             await interaction.followup.send(
-                "❌ Broadcast failed.", ephemeral=True
+                "Broadcast failed.", ephemeral=True
             )
+
+    # ── /admin-send-backup ────────────────────────────────────
+
+    @app_commands.command(
+        name="admin-send-backup",
+        description="DM each user a ZIP backup of their bot files",
+    )
+    @is_admin()
+    async def admin_send_backup(self, interaction: discord.Interaction) -> None:
+        import io
+        import zipfile
+        from pathlib import Path
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        settings = get_settings()
+        users = await db.list_all_users()
+
+        if not users:
+            await interaction.followup.send("No users found.", ephemeral=True)
+            return
+
+        sent = 0
+        failed = 0
+        skipped = 0
+
+        for user_row in users:
+            user_id = user_row["id"]
+            bots = await db.list_user_bots(user_id)
+
+            if not bots:
+                skipped += 1
+                continue
+
+            # Build a ZIP with all their bot files
+            buf = io.BytesIO()
+            try:
+                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for bot in bots:
+                        bot_dir = Path(bot["bot_path"])
+                        if not bot_dir.exists():
+                            continue
+                        for file in bot_dir.rglob("*"):
+                            if file.is_file() and file.name != "_upload.zip":
+                                arcname = f"{bot['name']}/{file.relative_to(bot_dir)}"
+                                zf.write(file, arcname)
+
+                buf.seek(0)
+
+                # Skip empty archives
+                if buf.getbuffer().nbytes <= 22:
+                    skipped += 1
+                    continue
+
+                # DM the user
+                try:
+                    discord_user = await self.bot.fetch_user(user_id)
+                    dm = await discord_user.create_dm()
+                    file = discord.File(buf, filename=f"minenodes_backup_{user_id}.zip")
+                    await dm.send(
+                        "Here's a backup of your bot files from MineNodes Bot Hoster.",
+                        file=file,
+                    )
+                    sent += 1
+                except discord.Forbidden:
+                    failed += 1
+                except discord.NotFound:
+                    failed += 1
+
+            except Exception as exc:
+                logger.error("Backup failed for user", user_id=user_id, error=str(exc))
+                failed += 1
+
+        await interaction.followup.send(
+            f"Backup done — sent: {sent}, failed: {failed}, skipped (no bots): {skipped}",
+            ephemeral=True,
+        )
 
     # ── Error Handler ────────────────────────────────────────
 
@@ -502,7 +579,7 @@ class AdminCommands(commands.Cog):
                 await interaction.response.send_message(str(error), ephemeral=True)
         else:
             logger.error("Admin command error", error=str(error), exc_info=True)
-            msg = "❌ An unexpected error occurred."
+            msg = "Something went wrong."
             if interaction.response.is_done():
                 await interaction.followup.send(msg, ephemeral=True)
             else:

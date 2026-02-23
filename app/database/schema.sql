@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Migration: add resource limit columns if table already existed
+ALTER TABLE users ADD COLUMN IF NOT EXISTS max_bots INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS max_ram_mb INTEGER NOT NULL DEFAULT 512;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS max_cpu REAL NOT NULL DEFAULT 0.5;
+
 -- ── Bots ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS bots (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
