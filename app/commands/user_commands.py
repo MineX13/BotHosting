@@ -2,8 +2,9 @@
 User-facing slash commands for MineNodes Bot Hoster.
 
 Commands:
-- /create-bot — Upload ZIP + token → deploy a new bot
+- /create-bot — DMs user for private token input, then deploys
 - /list-bots  — Show all user's bots with status
+- /manage-bot — Rich management panel with buttons
 - /start-bot  — Start a stopped bot
 - /stop-bot   — Stop a running bot
 - /restart-bot — Restart a bot
@@ -13,15 +14,11 @@ Commands:
 - /view-logs  — Show last 100 lines of bot logs
 - /status     — Bot hoster status, ping, uptime
 - /help       — Show all available commands
-
-All commands use:
-- Rate limiting (Redis-backed)
-- Suspension check (blocked if suspended)
-- Bot ownership verification
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -38,6 +35,298 @@ from app.utils.helpers import chunk_text
 from app.utils.logging import get_logger
 
 logger = get_logger("commands.user")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Bot Management Panel — Persistent View with Buttons
+# ═══════════════════════════════════════════════════════════════
+
+
+class BotManagementView(discord.ui.View):
+    """Interactive button panel for managing a hosted bot."""
+
+    def __init__(self, bot_id: str, deploy: DeploymentService) -> None:
+        super().__init__(timeout=None)  # Persistent
+        self.bot_id = bot_id
+        self.deploy = deploy
+
+    @discord.ui.button(label="Start", style=discord.ButtonStyle.success, emoji="▶️", row=0)
+    async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            uid = UUID(self.bot_id)
+            await verify_bot_ownership(interaction, uid)
+            await self.deploy.start_bot(uid)
+            await interaction.followup.send("✅ Bot started!", ephemeral=True)
+            # Refresh the management embed
+            await self._refresh_panel(interaction)
+        except Exception as exc:
+            await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+
+    @discord.ui.button(label="Stop", style=discord.ButtonStyle.secondary, emoji="⏸️", row=0)
+    async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            uid = UUID(self.bot_id)
+            await verify_bot_ownership(interaction, uid)
+            await self.deploy.stop_bot(uid)
+            await interaction.followup.send("✅ Bot stopped.", ephemeral=True)
+            await self._refresh_panel(interaction)
+        except Exception as exc:
+            await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+
+    @discord.ui.button(label="Restart", style=discord.ButtonStyle.primary, emoji="🔄", row=0)
+    async def restart_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            uid = UUID(self.bot_id)
+            await verify_bot_ownership(interaction, uid)
+            await self.deploy.restart_bot(uid)
+            await interaction.followup.send("✅ Bot restarted!", ephemeral=True)
+            await self._refresh_panel(interaction)
+        except Exception as exc:
+            await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+
+    @discord.ui.button(label="Logs", style=discord.ButtonStyle.secondary, emoji="📋", row=1)
+    async def logs_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            uid = UUID(self.bot_id)
+            await verify_bot_ownership(interaction, uid)
+            logs = await self.deploy.get_bot_logs(uid)
+            if not logs.strip():
+                await interaction.followup.send("📋 No logs available yet.", ephemeral=True)
+                return
+            chunks = chunk_text(f"```\n{logs}\n```")
+            for chunk in chunks:
+                await interaction.followup.send(chunk, ephemeral=True)
+        except Exception as exc:
+            await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+
+    @discord.ui.button(label="Stats", style=discord.ButtonStyle.secondary, emoji="📊", row=1)
+    async def stats_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            uid = UUID(self.bot_id)
+            await verify_bot_ownership(interaction, uid)
+            from app.services.process_service import ProcessService
+            process_svc = self.deploy._process
+            bot_record = await db.get_bot(uid)
+            if not bot_record:
+                await interaction.followup.send("❌ Bot not found.", ephemeral=True)
+                return
+            stats = await process_svc.get_stats(bot_record["container_name"])
+            if stats:
+                embed = discord.Embed(title="📊 Live Stats", color=discord.Color.teal())
+                embed.add_field(name="CPU", value=f"{stats.get('cpu_percent', 0):.1f}%", inline=True)
+                embed.add_field(name="Memory", value=f"{stats.get('memory_mb', 0):.1f} MB", inline=True)
+                embed.add_field(name="PID", value=str(stats.get('pid', 'N/A')), inline=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await interaction.followup.send("📊 Bot is not running — no stats.", ephemeral=True)
+        except Exception as exc:
+            await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+
+    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
+    async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            uid = UUID(self.bot_id)
+            await verify_bot_ownership(interaction, uid)
+            # Confirm deletion
+            confirm_view = ConfirmDeleteView(self.bot_id, self.deploy)
+            await interaction.followup.send(
+                "⚠️ **Are you sure?** This will permanently delete the bot and all its files.",
+                view=confirm_view,
+                ephemeral=True,
+            )
+        except Exception as exc:
+            await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+
+    async def _refresh_panel(self, interaction: discord.Interaction) -> None:
+        """Update the management embed with fresh data."""
+        try:
+            uid = UUID(self.bot_id)
+            bot_record = await db.get_bot(uid)
+            if bot_record:
+                embed = build_management_embed(bot_record)
+                view = BotManagementView(self.bot_id, self.deploy)
+                await interaction.message.edit(embed=embed, view=view)
+        except Exception:
+            pass  # Silently fail refresh — panel stays as-is
+
+
+class ConfirmDeleteView(discord.ui.View):
+    """Confirmation dialog for bot deletion."""
+
+    def __init__(self, bot_id: str, deploy: DeploymentService) -> None:
+        super().__init__(timeout=30)
+        self.bot_id = bot_id
+        self.deploy = deploy
+
+    @discord.ui.button(label="Yes, Delete", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            uid = UUID(self.bot_id)
+            await self.deploy.delete_bot(uid)
+            await interaction.followup.send(
+                f"🗑️ Bot `{self.bot_id}` permanently deleted.", ephemeral=True
+            )
+        except Exception as exc:
+            await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ Cancelled.", ephemeral=True)
+
+
+def build_management_embed(bot_record) -> discord.Embed:
+    """Build the rich management embed for a bot (similar to VPS management panel)."""
+    STATUS_MAP = {
+        "running": ("🟢 RUNNING", discord.Color.green()),
+        "stopped": ("🔴 STOPPED", discord.Color.red()),
+        "crashed": ("💥 CRASHED", discord.Color.dark_red()),
+        "building": ("🔨 BUILDING", discord.Color.orange()),
+        "error": ("⚠️ ERROR", discord.Color.dark_orange()),
+    }
+
+    status_text, color = STATUS_MAP.get(
+        bot_record["status"], ("❓ UNKNOWN", discord.Color.greyple())
+    )
+
+    embed = discord.Embed(
+        title=f"⭐ MineNodes — Bot Management",
+        description=f"Managing bot: **{bot_record['name']}**",
+        color=color,
+    )
+
+    # Allocated Resources section
+    resources = (
+        f"**Status:** {status_text}\n"
+        f"**Runtime:** {bot_record['runtime'].capitalize()}\n"
+        f"**RAM Limit:** {bot_record['ram_limit_mb']} MB\n"
+        f"**CPU Limit:** {bot_record['cpu_limit']} cores\n"
+        f"**Bot ID:** `{bot_record['id']}`"
+    )
+    embed.add_field(
+        name="▸ 📦 Allocated Resources",
+        value=resources,
+        inline=False,
+    )
+
+    # Timing info
+    created = bot_record["created_at"].strftime("%Y-%m-%d %H:%M")
+    updated = bot_record["updated_at"].strftime("%Y-%m-%d %H:%M")
+    timing = (
+        f"**Created:** {created}\n"
+        f"**Last Updated:** {updated}"
+    )
+    embed.add_field(
+        name="▸ 🕐 Timing",
+        value=timing,
+        inline=False,
+    )
+
+    # Controls hint
+    embed.add_field(
+        name="▸ 🎛️ Controls",
+        value="Use the buttons below to manage your bot",
+        inline=False,
+    )
+
+    embed.set_footer(text=f"MineNodes Bot Hoster • {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+
+    return embed
+
+
+# ═══════════════════════════════════════════════════════════════
+# DM-based Bot Creation Flow
+# ═══════════════════════════════════════════════════════════════
+
+
+class CreateBotModal(discord.ui.Modal, title="🤖 Create New Bot"):
+    """Modal that appears in DM to collect bot token and config."""
+
+    token = discord.ui.TextInput(
+        label="Bot Token",
+        placeholder="Paste your Discord bot token here...",
+        style=discord.TextStyle.short,
+        required=True,
+    )
+
+    runtime = discord.ui.TextInput(
+        label="Runtime",
+        placeholder="python or node (default: python)",
+        style=discord.TextStyle.short,
+        required=False,
+        default="python",
+        max_length=10,
+    )
+
+    bot_name = discord.ui.TextInput(
+        label="Bot Name",
+        placeholder="Display name for your bot (optional)",
+        style=discord.TextStyle.short,
+        required=False,
+        max_length=128,
+    )
+
+    def __init__(self, deploy: DeploymentService, zip_data: bytes, user_id: int):
+        super().__init__()
+        self.deploy = deploy
+        self.zip_data = zip_data
+        self.user_id = user_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        runtime = self.runtime.value.strip().lower() or "python"
+        name = self.bot_name.value.strip() or None
+        token_val = self.token.value.strip()
+
+        try:
+            result = await self.deploy.create_bot(
+                user_id=self.user_id,
+                zip_data=self.zip_data,
+                token=token_val,
+                runtime=runtime,
+                name=name,
+            )
+
+            # Fetch full bot record for management panel
+            bot_id = result["bot_id"]
+            bot_record = await db.get_bot(UUID(str(bot_id)))
+
+            if bot_record:
+                embed = build_management_embed(bot_record)
+                view = BotManagementView(str(bot_id), self.deploy)
+                await interaction.followup.send(
+                    "✅ **Bot deployed successfully!** Your token is encrypted and secure.",
+                    embed=embed,
+                    view=view,
+                )
+            else:
+                embed = discord.Embed(
+                    title="✅ Bot Deployed",
+                    color=discord.Color.green(),
+                )
+                embed.add_field(name="Bot ID", value=str(bot_id), inline=False)
+                embed.add_field(name="Name", value=result["name"], inline=True)
+                embed.add_field(name="Runtime", value=result["runtime"], inline=True)
+                embed.set_footer(text="Token encrypted • Use /manage-bot to control")
+                await interaction.followup.send(embed=embed)
+
+        except DeploymentError as exc:
+            await interaction.followup.send(f"❌ Deployment failed: {exc}")
+        except Exception as exc:
+            logger.error("Error in create_bot modal", error=str(exc), exc_info=True)
+            await interaction.followup.send("❌ An unexpected error occurred.")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Main Cog
+# ═══════════════════════════════════════════════════════════════
 
 
 class UserCommands(commands.Cog):
@@ -57,10 +346,8 @@ class UserCommands(commands.Cog):
         await interaction.response.defer()
 
         try:
-            # Ping
             latency_ms = round(self.bot.latency * 1000)
 
-            # Uptime
             boot_time = getattr(self.bot, "boot_time", None)
             if boot_time:
                 delta = datetime.now(timezone.utc) - boot_time
@@ -71,7 +358,6 @@ class UserCommands(commands.Cog):
             else:
                 uptime_str = "N/A"
 
-            # Stats
             stats = await db.get_stats()
             guild_count = len(self.bot.guilds)
 
@@ -88,25 +374,18 @@ class UserCommands(commands.Cog):
                 value=f"{stats['running_bots']} running / {stats['total_bots']} total",
                 inline=True,
             )
-            embed.add_field(
-                name="👥 Users",
-                value=str(stats["total_users"]),
-                inline=True,
-            )
+            embed.add_field(name="👥 Users", value=str(stats["total_users"]), inline=True)
             embed.add_field(
                 name="📡 Status",
                 value="🟢 Online" if latency_ms < 500 else "🟡 Degraded",
                 inline=True,
             )
             embed.set_footer(text="MineNodes Bot Hoster • Reliable 24/7 Hosting")
-
             await interaction.followup.send(embed=embed)
 
         except Exception as exc:
             logger.error("Error in status", error=str(exc), exc_info=True)
-            await interaction.followup.send(
-                "❌ Failed to get status.", ephemeral=True
-            )
+            await interaction.followup.send("❌ Failed to get status.", ephemeral=True)
 
     # ── /help ────────────────────────────────────────────────
 
@@ -120,11 +399,11 @@ class UserCommands(commands.Cog):
             description="Host your Discord bots with ease! Here are all available commands:",
             color=discord.Color.blurple(),
         )
-
         embed.add_field(
             name="🚀 Bot Management",
             value=(
                 "`/create-bot` — Deploy a new bot from a ZIP file\n"
+                "`/manage-bot` — Open bot management panel\n"
                 "`/list-bots` — List all your hosted bots\n"
                 "`/start-bot` — Start a stopped bot\n"
                 "`/stop-bot` — Stop a running bot\n"
@@ -151,7 +430,6 @@ class UserCommands(commands.Cog):
             inline=False,
         )
 
-        # Show admin commands if the user is admin
         settings = get_settings()
         if interaction.user.id == settings.admin_user_id:
             embed.add_field(
@@ -171,20 +449,16 @@ class UserCommands(commands.Cog):
             )
 
         embed.set_footer(text="MineNodes Bot Hoster • /status for service info")
-
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # ── /create-bot ──────────────────────────────────────────
+    # ── /create-bot (DM Flow) ────────────────────────────────
 
     @app_commands.command(
         name="create-bot",
-        description="Deploy a new Discord bot from a ZIP file",
+        description="Deploy a new Discord bot — DMs you for secure token input",
     )
     @app_commands.describe(
         zip_file="ZIP file containing your bot code (max 50MB)",
-        token="Your Discord bot token (encrypted before storage)",
-        runtime="Runtime: python (default) or node",
-        name="Display name for your bot",
     )
     @not_suspended()
     @rate_limit_check()
@@ -192,17 +466,13 @@ class UserCommands(commands.Cog):
         self,
         interaction: discord.Interaction,
         zip_file: discord.Attachment,
-        token: str,
-        runtime: str = "python",
-        name: str | None = None,
     ) -> None:
         settings = get_settings()
 
-        # Defer (ephemeral) — deployment takes time
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         try:
-            # Validate file size
+            # Validate file
             if zip_file.size > settings.max_zip_size_bytes:
                 await interaction.followup.send(
                     f"❌ File too large. Maximum size: {settings.max_zip_size_mb}MB",
@@ -210,49 +480,94 @@ class UserCommands(commands.Cog):
                 )
                 return
 
-            # Validate file type
             if not zip_file.filename.endswith(".zip"):
                 await interaction.followup.send(
-                    "❌ Please upload a `.zip` file.",
-                    ephemeral=True,
+                    "❌ Please upload a `.zip` file.", ephemeral=True
                 )
                 return
 
-            # Download ZIP
+            # Download ZIP data first
             zip_data = await zip_file.read()
 
-            # Deploy
-            result = await self.deploy.create_bot(
-                user_id=interaction.user.id,
-                zip_data=zip_data,
-                token=token,
-                runtime=runtime,
-                name=name,
-            )
+            # DM the user for token input
+            try:
+                dm_channel = await interaction.user.create_dm()
 
-            embed = discord.Embed(
-                title="✅ Bot Deployed Successfully",
-                color=discord.Color.green(),
-            )
-            embed.add_field(name="Bot ID", value=result["bot_id"], inline=False)
-            embed.add_field(name="Name", value=result["name"], inline=True)
-            embed.add_field(name="Runtime", value=result["runtime"], inline=True)
-            embed.add_field(name="Status", value="🟢 Running", inline=True)
-            embed.set_footer(text="Your bot token has been encrypted and stored securely.")
+                dm_embed = discord.Embed(
+                    title="🔐 MineNodes — Secure Bot Setup",
+                    description=(
+                        "Your bot code has been received! For security, "
+                        "please provide your bot token here in DMs.\n\n"
+                        "**Your token is encrypted with AES-256-GCM** before storage "
+                        "and never visible to anyone."
+                    ),
+                    color=discord.Color.green(),
+                )
+                dm_embed.add_field(
+                    name="📁 File",
+                    value=f"`{zip_file.filename}` ({zip_file.size / 1024:.0f} KB)",
+                    inline=True,
+                )
+                dm_embed.set_footer(text="Click the button below to continue setup")
 
-            await interaction.followup.send(embed=embed, ephemeral=True)
+                modal_button = CreateBotButton(self.deploy, zip_data, interaction.user.id)
+                await dm_channel.send(embed=dm_embed, view=modal_button)
 
-        except DeploymentError as exc:
-            await interaction.followup.send(
-                f"❌ Deployment failed: {exc}",
-                ephemeral=True,
-            )
+                await interaction.followup.send(
+                    "📩 **Check your DMs!** I've sent you a secure setup message "
+                    "to enter your bot token privately.",
+                    ephemeral=True,
+                )
+
+            except discord.Forbidden:
+                # Cannot DM — fallback: ask for token via modal in server
+                await interaction.followup.send(
+                    "❌ I can't DM you! Please enable DMs from server members, "
+                    "then try again.",
+                    ephemeral=True,
+                )
+
         except Exception as exc:
-            logger.error("Unexpected error in create_bot", error=str(exc), exc_info=True)
+            logger.error("Error in create_bot", error=str(exc), exc_info=True)
             await interaction.followup.send(
-                "❌ An unexpected error occurred. Please try again later.",
-                ephemeral=True,
+                "❌ An unexpected error occurred.", ephemeral=True
             )
+
+    # ── /manage-bot ──────────────────────────────────────────
+
+    @app_commands.command(
+        name="manage-bot",
+        description="Open the bot management panel with controls",
+    )
+    @app_commands.describe(bot_id="The UUID of the bot to manage")
+    @not_suspended()
+    @rate_limit_check()
+    async def manage_bot(
+        self,
+        interaction: discord.Interaction,
+        bot_id: str,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            uid = UUID(bot_id)
+            await verify_bot_ownership(interaction, uid)
+
+            bot_record = await db.get_bot(uid)
+            if not bot_record:
+                await interaction.followup.send("❌ Bot not found.", ephemeral=True)
+                return
+
+            embed = build_management_embed(bot_record)
+            view = BotManagementView(bot_id, self.deploy)
+
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+        except (ValueError, DeploymentError) as exc:
+            await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+        except Exception as exc:
+            logger.error("Error in manage_bot", error=str(exc), exc_info=True)
+            await interaction.followup.send("❌ An unexpected error occurred.", ephemeral=True)
 
     # ── /list-bots ───────────────────────────────────────────
 
@@ -297,155 +612,101 @@ class UserCommands(commands.Cog):
                         f"**ID:** `{bot['id']}`\n"
                         f"**Status:** {bot['status']}\n"
                         f"**Runtime:** {bot['runtime']}\n"
-                        f"**Created:** {created}"
+                        f"**Created:** {created}\n"
+                        f"Use `/manage-bot` with the ID above"
                     ),
                     inline=False,
                 )
 
+            embed.set_footer(text="Tip: Use /manage-bot <id> for full controls")
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as exc:
             logger.error("Error in list_bots", error=str(exc), exc_info=True)
             await interaction.followup.send(
-                "❌ Failed to list bots. Please try again.",
-                ephemeral=True,
+                "❌ Failed to list bots.", ephemeral=True
             )
 
     # ── /start-bot ───────────────────────────────────────────
 
-    @app_commands.command(
-        name="start-bot",
-        description="Start a stopped bot",
-    )
+    @app_commands.command(name="start-bot", description="Start a stopped bot")
     @app_commands.describe(bot_id="The UUID of the bot to start")
     @not_suspended()
     @rate_limit_check()
-    async def start_bot(
-        self,
-        interaction: discord.Interaction,
-        bot_id: str,
-    ) -> None:
+    async def start_bot(self, interaction: discord.Interaction, bot_id: str) -> None:
         await interaction.response.defer(ephemeral=True)
-
         try:
             uid = UUID(bot_id)
             await verify_bot_ownership(interaction, uid)
             await self.deploy.start_bot(uid)
-            await interaction.followup.send(
-                f"✅ Bot `{bot_id}` started successfully.", ephemeral=True
-            )
+            await interaction.followup.send(f"✅ Bot `{bot_id}` started.", ephemeral=True)
         except (ValueError, DeploymentError) as exc:
             await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         except Exception as exc:
             logger.error("Error in start_bot", error=str(exc), exc_info=True)
-            await interaction.followup.send(
-                "❌ An unexpected error occurred.", ephemeral=True
-            )
+            await interaction.followup.send("❌ An unexpected error occurred.", ephemeral=True)
 
     # ── /stop-bot ────────────────────────────────────────────
 
-    @app_commands.command(
-        name="stop-bot",
-        description="Stop a running bot",
-    )
+    @app_commands.command(name="stop-bot", description="Stop a running bot")
     @app_commands.describe(bot_id="The UUID of the bot to stop")
     @not_suspended()
     @rate_limit_check()
-    async def stop_bot(
-        self,
-        interaction: discord.Interaction,
-        bot_id: str,
-    ) -> None:
+    async def stop_bot(self, interaction: discord.Interaction, bot_id: str) -> None:
         await interaction.response.defer(ephemeral=True)
-
         try:
             uid = UUID(bot_id)
             await verify_bot_ownership(interaction, uid)
             await self.deploy.stop_bot(uid)
-            await interaction.followup.send(
-                f"✅ Bot `{bot_id}` stopped.", ephemeral=True
-            )
+            await interaction.followup.send(f"✅ Bot `{bot_id}` stopped.", ephemeral=True)
         except (ValueError, DeploymentError) as exc:
             await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         except Exception as exc:
             logger.error("Error in stop_bot", error=str(exc), exc_info=True)
-            await interaction.followup.send(
-                "❌ An unexpected error occurred.", ephemeral=True
-            )
+            await interaction.followup.send("❌ An unexpected error occurred.", ephemeral=True)
 
     # ── /restart-bot ─────────────────────────────────────────
 
-    @app_commands.command(
-        name="restart-bot",
-        description="Restart a bot",
-    )
+    @app_commands.command(name="restart-bot", description="Restart a bot")
     @app_commands.describe(bot_id="The UUID of the bot to restart")
     @not_suspended()
     @rate_limit_check()
-    async def restart_bot(
-        self,
-        interaction: discord.Interaction,
-        bot_id: str,
-    ) -> None:
+    async def restart_bot(self, interaction: discord.Interaction, bot_id: str) -> None:
         await interaction.response.defer(ephemeral=True)
-
         try:
             uid = UUID(bot_id)
             await verify_bot_ownership(interaction, uid)
             await self.deploy.restart_bot(uid)
-            await interaction.followup.send(
-                f"✅ Bot `{bot_id}` restarted.", ephemeral=True
-            )
+            await interaction.followup.send(f"✅ Bot `{bot_id}` restarted.", ephemeral=True)
         except (ValueError, DeploymentError) as exc:
             await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         except Exception as exc:
             logger.error("Error in restart_bot", error=str(exc), exc_info=True)
-            await interaction.followup.send(
-                "❌ An unexpected error occurred.", ephemeral=True
-            )
+            await interaction.followup.send("❌ An unexpected error occurred.", ephemeral=True)
 
     # ── /delete-bot ──────────────────────────────────────────
 
-    @app_commands.command(
-        name="delete-bot",
-        description="Permanently delete a bot (cannot be undone!)",
-    )
+    @app_commands.command(name="delete-bot", description="Permanently delete a bot (cannot be undone!)")
     @app_commands.describe(bot_id="The UUID of the bot to delete")
     @not_suspended()
     @rate_limit_check()
-    async def delete_bot(
-        self,
-        interaction: discord.Interaction,
-        bot_id: str,
-    ) -> None:
+    async def delete_bot(self, interaction: discord.Interaction, bot_id: str) -> None:
         await interaction.response.defer(ephemeral=True)
-
         try:
             uid = UUID(bot_id)
             await verify_bot_ownership(interaction, uid)
             await self.deploy.delete_bot(uid)
-            await interaction.followup.send(
-                f"🗑️ Bot `{bot_id}` has been permanently deleted.",
-                ephemeral=True,
-            )
+            await interaction.followup.send(f"🗑️ Bot `{bot_id}` permanently deleted.", ephemeral=True)
         except (ValueError, DeploymentError) as exc:
             await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         except Exception as exc:
             logger.error("Error in delete_bot", error=str(exc), exc_info=True)
-            await interaction.followup.send(
-                "❌ An unexpected error occurred.", ephemeral=True
-            )
+            await interaction.followup.send("❌ An unexpected error occurred.", ephemeral=True)
 
     # ── /replace-files ───────────────────────────────────────
 
-    @app_commands.command(
-        name="replace-files",
-        description="Upload new code to replace an existing bot's files",
-    )
-    @app_commands.describe(
-        bot_id="The UUID of the bot to update",
-        zip_file="New ZIP file with updated code",
-    )
+    @app_commands.command(name="replace-files", description="Upload new code to replace an existing bot's files")
+    @app_commands.describe(bot_id="The UUID of the bot to update", zip_file="New ZIP file with updated code")
     @not_suspended()
     @rate_limit_check()
     async def replace_files(
@@ -462,24 +723,16 @@ class UserCommands(commands.Cog):
             await verify_bot_ownership(interaction, uid)
 
             if zip_file.size > settings.max_zip_size_bytes:
-                await interaction.followup.send(
-                    f"❌ File too large. Maximum: {settings.max_zip_size_mb}MB",
-                    ephemeral=True,
-                )
+                await interaction.followup.send(f"❌ File too large. Max: {settings.max_zip_size_mb}MB", ephemeral=True)
                 return
-
             if not zip_file.filename.endswith(".zip"):
-                await interaction.followup.send(
-                    "❌ Please upload a `.zip` file.", ephemeral=True
-                )
+                await interaction.followup.send("❌ Please upload a `.zip` file.", ephemeral=True)
                 return
 
             zip_data = await zip_file.read()
             result = await self.deploy.replace_files(uid, zip_data)
-
             await interaction.followup.send(
-                f"✅ Bot `{bot_id}` files replaced and restarted.\n"
-                f"Status: {result['status']}",
+                f"✅ Bot `{bot_id}` files replaced and restarted.\nStatus: {result['status']}",
                 ephemeral=True,
             )
 
@@ -487,16 +740,11 @@ class UserCommands(commands.Cog):
             await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         except Exception as exc:
             logger.error("Error in replace_files", error=str(exc), exc_info=True)
-            await interaction.followup.send(
-                "❌ An unexpected error occurred.", ephemeral=True
-            )
+            await interaction.followup.send("❌ An unexpected error occurred.", ephemeral=True)
 
     # ── /edit-file ───────────────────────────────────────────
 
-    @app_commands.command(
-        name="edit-file",
-        description="View or edit a file in your bot's directory",
-    )
+    @app_commands.command(name="edit-file", description="View or edit a file in your bot's directory")
     @app_commands.describe(
         bot_id="The UUID of the bot",
         filename="File path relative to bot root (e.g. main.py)",
@@ -518,41 +766,29 @@ class UserCommands(commands.Cog):
             await verify_bot_ownership(interaction, uid)
 
             if content is None:
-                # READ mode
                 file_content = await self.deploy.read_bot_file(uid, filename)
                 chunks = chunk_text(f"```\n{file_content}\n```")
                 for chunk in chunks:
                     await interaction.followup.send(chunk, ephemeral=True)
             else:
-                # WRITE mode
                 await self.deploy.write_bot_file(uid, filename, content)
                 await interaction.followup.send(
-                    f"✅ File `{filename}` updated and bot restarted.",
-                    ephemeral=True,
+                    f"✅ File `{filename}` updated and bot restarted.", ephemeral=True
                 )
 
         except (ValueError, DeploymentError) as exc:
             await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         except Exception as exc:
             logger.error("Error in edit_file", error=str(exc), exc_info=True)
-            await interaction.followup.send(
-                "❌ An unexpected error occurred.", ephemeral=True
-            )
+            await interaction.followup.send("❌ An unexpected error occurred.", ephemeral=True)
 
     # ── /view-logs ───────────────────────────────────────────
 
-    @app_commands.command(
-        name="view-logs",
-        description="View the last 100 lines of your bot's logs",
-    )
+    @app_commands.command(name="view-logs", description="View the last 100 lines of your bot's logs")
     @app_commands.describe(bot_id="The UUID of the bot")
     @not_suspended()
     @rate_limit_check()
-    async def view_logs(
-        self,
-        interaction: discord.Interaction,
-        bot_id: str,
-    ) -> None:
+    async def view_logs(self, interaction: discord.Interaction, bot_id: str) -> None:
         await interaction.response.defer(ephemeral=True)
 
         try:
@@ -560,13 +796,9 @@ class UserCommands(commands.Cog):
             await verify_bot_ownership(interaction, uid)
 
             logs = await self.deploy.get_bot_logs(uid)
-
             if not logs.strip():
-                await interaction.followup.send(
-                    "📋 No logs available yet.", ephemeral=True
-                )
+                await interaction.followup.send("📋 No logs available yet.", ephemeral=True)
                 return
-
             chunks = chunk_text(f"```\n{logs}\n```")
             for chunk in chunks:
                 await interaction.followup.send(chunk, ephemeral=True)
@@ -575,9 +807,7 @@ class UserCommands(commands.Cog):
             await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         except Exception as exc:
             logger.error("Error in view_logs", error=str(exc), exc_info=True)
-            await interaction.followup.send(
-                "❌ An unexpected error occurred.", ephemeral=True
-            )
+            await interaction.followup.send("❌ An unexpected error occurred.", ephemeral=True)
 
     # ── Error Handler ────────────────────────────────────────
 
@@ -586,7 +816,6 @@ class UserCommands(commands.Cog):
         interaction: discord.Interaction,
         error: app_commands.AppCommandError,
     ) -> None:
-        """Global error handler for this cog's slash commands."""
         if isinstance(error, app_commands.CheckFailure):
             if interaction.response.is_done():
                 await interaction.followup.send(str(error), ephemeral=True)
@@ -601,9 +830,28 @@ class UserCommands(commands.Cog):
                 await interaction.response.send_message(msg, ephemeral=True)
 
 
+# ═══════════════════════════════════════════════════════════════
+# DM Button (opens the setup modal)
+# ═══════════════════════════════════════════════════════════════
+
+
+class CreateBotButton(discord.ui.View):
+    """Button sent via DM that opens the token input modal."""
+
+    def __init__(self, deploy: DeploymentService, zip_data: bytes, user_id: int):
+        super().__init__(timeout=300)  # 5 min to respond
+        self.deploy = deploy
+        self.zip_data = zip_data
+        self.user_id = user_id
+
+    @discord.ui.button(label="🔑 Enter Bot Token", style=discord.ButtonStyle.success)
+    async def enter_token(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = CreateBotModal(self.deploy, self.zip_data, self.user_id)
+        await interaction.response.send_modal(modal)
+
+
 async def setup(bot: commands.Bot) -> None:
     """Called by bot.load_extension() — registers the cog."""
-    # DeploymentService is injected via bot.deployment_service
     deployment_service = getattr(bot, "deployment_service", None)
     if deployment_service is None:
         raise RuntimeError("bot.deployment_service must be set before loading this cog")
