@@ -520,10 +520,13 @@ class UserCommands(commands.Cog):
                 )
 
             except discord.Forbidden:
-                # Cannot DM — fallback: ask for token via modal in server
+                # Cannot DM — fallback: open modal directly in server (still private)
+                fallback_view = CreateBotButton(self.deploy, zip_data, interaction.user.id)
                 await interaction.followup.send(
-                    "❌ I can't DM you! Please enable DMs from server members, "
-                    "then try again.",
+                    "⚠️ I couldn't DM you, but no worries! "
+                    "Click the button below to enter your token securely.\n"
+                    "*Modal inputs are private — only you can see them.*",
+                    view=fallback_view,
                     ephemeral=True,
                 )
 
