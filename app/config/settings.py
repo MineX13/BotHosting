@@ -1,7 +1,6 @@
 """
 Application settings — loaded from environment variables via Pydantic.
 
-Cross-platform: auto-detects Docker socket on Windows vs Linux.
 All resource limits and paths are configurable.
 """
 
@@ -60,12 +59,6 @@ class Settings(BaseSettings):
         description="Root directory for user bot files",
     )
 
-    # ── Docker ───────────────────────────────────────────────
-    docker_host: Optional[str] = Field(
-        default=None,
-        description="Docker socket URL (auto-detected if not set)",
-    )
-
     # ── Resource Limits ──────────────────────────────────────
     max_bots_per_user: int = Field(default=3, ge=1)
     bot_ram_limit_mb: int = Field(default=512, ge=64)
@@ -73,7 +66,6 @@ class Settings(BaseSettings):
     bot_disk_limit_mb: int = Field(default=1024, ge=100)
     max_user_ram_mb: int = Field(default=1024, ge=256)
     max_zip_size_mb: int = Field(default=50, ge=1)
-    docker_build_timeout: int = Field(default=60, ge=10)
 
     # ── Rate Limiting ────────────────────────────────────────
     rate_limit_commands: int = Field(default=5, ge=1)
@@ -85,14 +77,6 @@ class Settings(BaseSettings):
 
     # ── Derived Properties ───────────────────────────────────
 
-    @property
-    def resolved_docker_host(self) -> str:
-        """Return the Docker socket URL, auto-detecting OS if not configured."""
-        if self.docker_host:
-            return self.docker_host
-        if platform.system() == "Windows":
-            return "npipe:////./pipe/docker_engine"
-        return "unix:///var/run/docker.sock"
 
     @property
     def base_path(self) -> Path:

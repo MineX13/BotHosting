@@ -7,7 +7,7 @@ Initialises:
 3. Encryption (AES-256-GCM)
 4. Database pool (asyncpg → PostgreSQL)
 5. Redis client (rate limiting)
-6. Docker service
+6. Process service (subprocess management)
 7. Deployment & monitoring services
 8. Discord bot with slash commands
 9. Graceful shutdown
@@ -39,7 +39,7 @@ from app.config.settings import get_settings
 from app.database.connection import create_pool, close_pool
 from app.security.encryption import init_encryption
 from app.security.rate_limiter import init_rate_limiter
-from app.services.docker_service import DockerService
+from app.services.process_service import ProcessService
 from app.services.deployment_service import DeploymentService
 from app.services.monitoring_service import MonitoringService
 from app.utils.logging import setup_logging, get_logger
@@ -93,9 +93,9 @@ async def main() -> None:
         )
 
     # ── 7. Services ──────────────────────────────────────────
-    docker_service = DockerService()
-    deployment_service = DeploymentService(docker_service)
-    monitoring_service = MonitoringService(docker_service)
+    process_service = ProcessService()
+    deployment_service = DeploymentService(process_service)
+    monitoring_service = MonitoringService(process_service)
 
     # ── 8. Discord bot ───────────────────────────────────────
     intents = discord.Intents.default()
@@ -126,7 +126,7 @@ async def main() -> None:
         except Exception as exc:
             logger.error("Failed to sync commands", error=str(exc))
 
-        # Start monitoring
+        # Start monitoring (also recovers processes)
         await monitoring_service.start()
         logger.info("Monitoring service started")
 

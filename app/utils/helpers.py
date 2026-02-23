@@ -1,7 +1,6 @@
 """
 Utility helpers used across the project.
 
-- Dockerfile generation templates (Python / Node)
 - Safe path joining
 - Text chunking for Discord's 2000-char limit
 - Size formatting
@@ -12,74 +11,6 @@ from __future__ import annotations
 import os
 from pathlib import Path, PurePosixPath
 from typing import List
-
-
-# ── Dockerfile Templates ─────────────────────────────────────
-
-PYTHON_DOCKERFILE = """\
-FROM python:3.11-slim
-
-# Security: non-root user
-RUN groupadd -r botuser && useradd -r -g botuser -d /app -s /sbin/nologin botuser
-
-WORKDIR /app
-
-# Install dependencies first (layer caching)
-COPY requirements.txt* ./
-RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
-
-# Copy application code
-COPY . .
-
-# Security: change ownership and drop privileges
-RUN chown -R botuser:botuser /app
-USER botuser
-
-CMD ["python", "main.py"]
-"""
-
-NODE_DOCKERFILE = """\
-FROM node:20-slim
-
-# Security: non-root user
-RUN groupadd -r botuser && useradd -r -g botuser -d /app -s /sbin/nologin botuser
-
-WORKDIR /app
-
-# Install dependencies first (layer caching)
-COPY package*.json ./
-RUN npm ci --production 2>/dev/null || npm install --production 2>/dev/null || true
-
-# Copy application code
-COPY . .
-
-# Security: change ownership and drop privileges
-RUN chown -R botuser:botuser /app
-USER botuser
-
-CMD ["node", "index.js"]
-"""
-
-
-def generate_dockerfile(runtime: str) -> str:
-    """Return the appropriate Dockerfile content for the given runtime.
-
-    Args:
-        runtime: Either 'python' or 'node'.
-
-    Returns:
-        Dockerfile content as a string.
-
-    Raises:
-        ValueError: If runtime is not supported.
-    """
-    templates = {
-        "python": PYTHON_DOCKERFILE,
-        "node": NODE_DOCKERFILE,
-    }
-    if runtime not in templates:
-        raise ValueError(f"Unsupported runtime: {runtime!r}. Choose from: {list(templates.keys())}")
-    return templates[runtime]
 
 
 # ── Path Safety ──────────────────────────────────────────────

@@ -1,22 +1,21 @@
 """
-Monitoring service — background tasks for container health and maintenance.
+Monitoring service — background tasks for process health and maintenance.
 
 Runs as asyncio tasks alongside the Discord bot:
-- Periodic health checks (mark crashed containers)
-- Weekly image cleanup
+- Periodic health checks (mark crashed processes)
+- Process recovery after controller restart
 - Memory usage monitoring with alerts
 """
 
 from __future__ import annotations
 
 import asyncio
-import platform
 from typing import Optional
 
 import psutil
 
 from app.database import queries as db
-from app.services.docker_service import DockerService
+from app.services.process_service import ProcessService
 from app.utils.logging import get_logger
 
 logger = get_logger("services.monitoring")
@@ -25,10 +24,9 @@ logger = get_logger("services.monitoring")
 class MonitoringService:
     """Background monitoring tasks for the bot hosting system."""
 
-    def __init__(self, docker_service: DockerService) -> None:
-        self._docker = docker_service
+    def __init__(self, process_service: ProcessService) -> None:
+        self._process = process_service
         self._health_task: Optional[asyncio.Task] = None
-        self._cleanup_task: Optional[asyncio.Task] = None
         self._memory_task: Optional[asyncio.Task] = None
         self._running = False
 
@@ -36,11 +34,13 @@ class MonitoringService:
         """Start all background monitoring tasks."""
         self._running = True
 
+        # Recover any processes from before controller restart
+        recovered = await self._process.recover_processes()
+        if recovered > 0:
+            logger.info(f"Recovered {recovered} bot processes from PID files")
+
         self._health_task = asyncio.create_task(
             self._health_check_loop(), name="health_check"
-        )
-        self._cleanup_task = asyncio.create_task(
-            self._image_cleanup_loop(), name="image_cleanup"
         )
         self._memory_task = asyncio.create_task(
             self._memory_monitor_loop(), name="memory_monitor"
@@ -52,7 +52,7 @@ class MonitoringService:
         """Cancel all background tasks."""
         self._running = False
 
-        for task in (self._health_task, self._cleanup_task, self._memory_task):
+        for task in (self._health_task, self._memory_task):
             if task is not None and not task.done():
                 task.cancel()
                 try:
@@ -65,7 +65,7 @@ class MonitoringService:
     # ── Health Checks ────────────────────────────────────────
 
     async def _health_check_loop(self) -> None:
-        """Periodically check container health and update DB status."""
+        """Periodically check process health and update DB status."""
         while self._running:
             try:
                 await self._run_health_checks()
@@ -75,22 +75,26 @@ class MonitoringService:
             await asyncio.sleep(30)  # Check every 30 seconds
 
     async def _run_health_checks(self) -> None:
-        """Check all bots and sync DB status with Docker reality."""
+        """Check all bots and sync DB status with process reality."""
         all_bots = await db.list_all_bots()
 
         for bot in all_bots:
             try:
-                container_status = await self._docker.get_container_status(
+                process_status = self._process.get_status(
                     bot["container_name"]
                 )
 
-                # Map Docker status to our status enum
-                if container_status == "running":
+                # Map process status to our status enum
+                if process_status == "running":
                     db_status = "running"
-                elif container_status in ("exited", "dead"):
+                elif process_status == "exited":
                     db_status = "crashed"
-                elif container_status == "not_found":
-                    db_status = "stopped"
+                elif process_status == "not_found":
+                    # If DB says running but process not found → crashed
+                    if bot["status"] == "running":
+                        db_status = "crashed"
+                    else:
+                        db_status = bot["status"]  # Keep current DB status
                 else:
                     db_status = "stopped"
 
@@ -110,20 +114,6 @@ class MonitoringService:
                     bot_id=str(bot["id"]),
                     error=str(exc),
                 )
-
-    # ── Image Cleanup ────────────────────────────────────────
-
-    async def _image_cleanup_loop(self) -> None:
-        """Weekly cleanup of unused Docker images."""
-        while self._running:
-            # Wait 7 days between cleanups
-            await asyncio.sleep(7 * 24 * 3600)
-
-            try:
-                result = await self._docker.prune_unused_images()
-                logger.info("Weekly image cleanup completed", result=str(result))
-            except Exception as exc:
-                logger.error("Image cleanup failed", error=str(exc))
 
     # ── Memory Monitoring ────────────────────────────────────
 
