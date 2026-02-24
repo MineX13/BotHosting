@@ -159,10 +159,12 @@ class ProcessService:
         else:
             cmd = ["node", entrypoint]
 
-        # Environment: inherit + BOT_TOKEN + PYTHONPATH for deps
+        # Environment: inherit + set token under all common env var names
         env = os.environ.copy()
         env["BOT_TOKEN"] = bot_token
-        env["DISCORD_TOKEN"] = bot_token  # Common alternative name
+        env["TOKEN"] = bot_token
+        env["DISCORD_TOKEN"] = bot_token
+        env["DISCORD_BOT_TOKEN"] = bot_token
 
         if runtime == "python":
             deps_dir = bot_dir / ".deps"
