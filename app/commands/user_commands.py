@@ -100,7 +100,7 @@ class BotManagementView(discord.ui.View):
             if not bot_record:
                 await interaction.followup.send("Bot not found.", ephemeral=True)
                 return
-            stats = await process_svc.get_process_stats(bot_record["container_name"])
+            stats = process_svc.get_process_stats(bot_record["container_name"])
             if stats:
                 embed = discord.Embed(title="Live Usage", color=0x2b2d31)
                 embed.add_field(name="CPU", value=f"{stats.get('cpu_percent', 0):.1f}%", inline=True)
