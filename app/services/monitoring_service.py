@@ -4,19 +4,25 @@ Monitoring service — background tasks for process health and maintenance.
 Runs as asyncio tasks alongside the Discord bot:
 - Periodic health checks (mark crashed processes)
 - Process recovery after controller restart
+- Auto-restart bots that were running before shutdown
 - Memory usage monitoring with alerts
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from pathlib import Path
+from typing import Optional, TYPE_CHECKING
 
 import psutil
 
 from app.database import queries as db
+from app.security.encryption import decrypt_token
 from app.services.process_service import ProcessService
 from app.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from app.services.deployment_service import DeploymentService
 
 logger = get_logger("services.monitoring")
 
@@ -24,8 +30,13 @@ logger = get_logger("services.monitoring")
 class MonitoringService:
     """Background monitoring tasks for the bot hosting system."""
 
-    def __init__(self, process_service: ProcessService) -> None:
+    def __init__(
+        self,
+        process_service: ProcessService,
+        deployment_service: "DeploymentService | None" = None,
+    ) -> None:
         self._process = process_service
+        self._deploy = deployment_service
         self._health_task: Optional[asyncio.Task] = None
         self._memory_task: Optional[asyncio.Task] = None
         self._running = False
@@ -39,6 +50,9 @@ class MonitoringService:
         if recovered > 0:
             logger.info(f"Recovered {recovered} bot processes from PID files")
 
+        # Auto-restart bots that were running before shutdown
+        await self._restart_dead_bots()
+
         self._health_task = asyncio.create_task(
             self._health_check_loop(), name="health_check"
         )
@@ -47,6 +61,50 @@ class MonitoringService:
         )
 
         logger.info("Monitoring service started")
+
+    async def _restart_dead_bots(self) -> None:
+        """Restart bots that the DB says were running but aren't anymore."""
+        all_bots = await db.list_all_bots()
+        restarted = 0
+        failed = 0
+
+        for bot in all_bots:
+            if bot["status"] != "running":
+                continue
+
+            # Check if already tracked and alive
+            proc_status = self._process.get_status(bot["container_name"])
+            if proc_status == "running":
+                continue
+
+            # Bot was running but process is gone — restart it
+            try:
+                token = decrypt_token(bot["encrypted_token"])
+                await self._process.start_process(
+                    container_name=bot["container_name"],
+                    bot_dir=Path(bot["bot_path"]),
+                    bot_token=token,
+                    runtime=bot["runtime"],
+                )
+                restarted += 1
+                logger.info(
+                    "Auto-restarted bot",
+                    bot_id=str(bot["id"]),
+                    name=bot["name"],
+                )
+            except Exception as exc:
+                failed += 1
+                await db.update_bot_status(bot["id"], "crashed")
+                logger.warning(
+                    "Failed to auto-restart bot",
+                    bot_id=str(bot["id"]),
+                    error=str(exc),
+                )
+
+        if restarted > 0 or failed > 0:
+            logger.info(
+                f"Auto-restart complete: {restarted} restarted, {failed} failed"
+            )
 
     async def stop(self) -> None:
         """Cancel all background tasks."""
