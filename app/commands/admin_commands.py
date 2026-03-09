@@ -274,8 +274,9 @@ class AdminCommands(commands.Cog):
     @app_commands.describe(
         user_id="Discord user ID to configure",
         max_bots="Max bots allowed (e.g. 5)",
-        max_ram_mb="Max RAM per bot in MB (e.g. 1024)",
+        max_ram_mb="Max RAM per bot in MB (e.g. 4096)",
         max_cpu="Max CPU per bot (e.g. 1.0 = 1 core)",
+        max_disk_mb="Max disk space per bot in MB (e.g. 5120)",
     )
     @is_admin()
     async def admin_set_limits(
@@ -285,15 +286,16 @@ class AdminCommands(commands.Cog):
         max_bots: int = None,
         max_ram_mb: int = None,
         max_cpu: float = None,
+        max_disk_mb: int = None,
     ) -> None:
         await interaction.response.defer(ephemeral=True)
 
         try:
             uid = int(user_id)
 
-            if max_bots is None and max_ram_mb is None and max_cpu is None:
+            if max_bots is None and max_ram_mb is None and max_cpu is None and max_disk_mb is None:
                 await interaction.followup.send(
-                    "❌ Provide at least one limit to set (max_bots, max_ram_mb, or max_cpu).",
+                    "❌ Provide at least one limit to set.",
                     ephemeral=True,
                 )
                 return
@@ -308,6 +310,9 @@ class AdminCommands(commands.Cog):
             if max_cpu is not None and max_cpu <= 0:
                 await interaction.followup.send("❌ max_cpu must be > 0.", ephemeral=True)
                 return
+            if max_disk_mb is not None and max_disk_mb < 100:
+                await interaction.followup.send("❌ max_disk_mb must be ≥ 100.", ephemeral=True)
+                return
 
             # Ensure user exists first
             await db.ensure_user(uid)
@@ -317,6 +322,7 @@ class AdminCommands(commands.Cog):
                 max_bots=max_bots,
                 max_ram_mb=max_ram_mb,
                 max_cpu=max_cpu,
+                max_disk_mb=max_disk_mb,
             )
 
             embed = discord.Embed(
@@ -326,6 +332,7 @@ class AdminCommands(commands.Cog):
             embed.add_field(name="🤖 Max Bots", value=str(updated["max_bots"]), inline=True)
             embed.add_field(name="🧠 Max RAM", value=f"{updated['max_ram_mb']} MB", inline=True)
             embed.add_field(name="⚡ Max CPU", value=str(updated["max_cpu"]), inline=True)
+            embed.add_field(name="💾 Max Disk", value=f"{updated.get('max_disk_mb', 1024)} MB", inline=True)
 
             await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -372,6 +379,11 @@ class AdminCommands(commands.Cog):
             embed.add_field(
                 name="⚡ Max CPU / Bot",
                 value=str(limits["max_cpu"]),
+                inline=True,
+            )
+            embed.add_field(
+                name="💾 Max Disk / Bot",
+                value=f"{limits.get('max_disk_mb', 1024)} MB",
                 inline=True,
             )
 

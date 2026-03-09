@@ -82,3 +82,12 @@ nohup venv/bin/python3 -m app.main > controller.log 2>&1 &
 
 
 
+apt update && apt install -y redis-server
+redis-server --daemonize yes
+cd /bot && git pull origin main
+
+redis-server --daemonize yes
+echo "REDIS_URL=redis://localhost:6379" >> /bot/.env
+cd /bot && git pull origin main
+redis-cli ping
+pkill -f "python.*main" ; sleep 1 && cd /bot && python -m app.main &

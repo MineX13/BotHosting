@@ -155,6 +155,8 @@ class DeploymentService:
                 bot_dir=bot_dir,
                 bot_token=token,
                 runtime=runtime,
+                cpu_limit=user_limits["max_cpu"],
+                disk_limit_mb=user_limits.get("max_disk_mb", settings.bot_disk_limit_mb),
             )
         except ProcessServiceError as exc:
             shutil.rmtree(bot_dir, ignore_errors=True)
@@ -170,8 +172,9 @@ class DeploymentService:
                 encrypted_token=encrypted_token,
                 runtime=runtime,
                 bot_path=str(bot_dir),
-                ram_limit_mb=settings.bot_ram_limit_mb,
-                cpu_limit=settings.bot_cpu_limit,
+                ram_limit_mb=user_limits["max_ram_mb"],
+                cpu_limit=user_limits["max_cpu"],
+                disk_limit_mb=user_limits.get("max_disk_mb", settings.bot_disk_limit_mb),
             )
             await db.update_bot_status(bot_record["id"], "running")
         except Exception as exc:
@@ -263,6 +266,8 @@ class DeploymentService:
                 bot_dir=bot_dir,
                 bot_token=decrypted_token,
                 runtime=runtime,
+                cpu_limit=bot["cpu_limit"],
+                disk_limit_mb=bot.get("disk_limit_mb", settings.bot_disk_limit_mb),
             )
             await db.update_bot_status(bot_id, "running")
         except ProcessServiceError as exc:
@@ -319,6 +324,8 @@ class DeploymentService:
                 bot_dir=Path(bot["bot_path"]),
                 bot_token=decrypted_token,
                 runtime=bot["runtime"],
+                cpu_limit=bot["cpu_limit"],
+                disk_limit_mb=bot.get("disk_limit_mb", get_settings().bot_disk_limit_mb),
             )
             await db.update_bot_status(bot_id, "running")
         except ProcessServiceError as exc:
@@ -345,6 +352,8 @@ class DeploymentService:
                 bot_dir=Path(bot["bot_path"]),
                 bot_token=decrypted_token,
                 runtime=bot["runtime"],
+                cpu_limit=bot["cpu_limit"],
+                disk_limit_mb=bot.get("disk_limit_mb", get_settings().bot_disk_limit_mb),
             )
             await db.update_bot_status(bot_id, "running")
         except ProcessServiceError as exc:
@@ -418,6 +427,8 @@ class DeploymentService:
                 bot_dir=bot_dir,
                 bot_token=decrypted_token,
                 runtime=bot["runtime"],
+                cpu_limit=bot["cpu_limit"],
+                disk_limit_mb=bot.get("disk_limit_mb", get_settings().bot_disk_limit_mb),
             )
             await db.update_bot_status(bot_id, "running")
         except ProcessServiceError as exc:

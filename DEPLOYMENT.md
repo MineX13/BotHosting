@@ -30,6 +30,9 @@ sudo apt install -y postgresql postgresql-contrib
 # Install Redis (optional — enables rate limiting)
 sudo apt install -y redis-server
 sudo systemctl enable redis-server
+
+# Install cpulimit (required for process-level CPU limits)
+sudo apt install -y cpulimit
 ```
 
 ## 2. Database Setup

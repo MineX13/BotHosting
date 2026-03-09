@@ -23,16 +23,18 @@ CREATE TABLE IF NOT EXISTS users (
     id              BIGINT PRIMARY KEY,          -- Discord user ID
     suspended       BOOLEAN NOT NULL DEFAULT FALSE,
     max_bots        INTEGER NOT NULL DEFAULT 3,  -- Max bots allowed
-    max_ram_mb      INTEGER NOT NULL DEFAULT 512,-- Max RAM per bot (MB)
-    max_cpu         REAL NOT NULL DEFAULT 0.5,   -- Max CPU per bot
+    max_ram_mb      INTEGER NOT NULL DEFAULT 4096,-- Max RAM per bot (MB)
+    max_cpu         REAL NOT NULL DEFAULT 1.0,   -- Max CPU per bot
+    max_disk_mb     INTEGER NOT NULL DEFAULT 5120, -- Max disk space per bot (MB)
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Migration: add resource limit columns if table already existed
 ALTER TABLE users ADD COLUMN IF NOT EXISTS max_bots INTEGER NOT NULL DEFAULT 3;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS max_ram_mb INTEGER NOT NULL DEFAULT 512;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS max_cpu REAL NOT NULL DEFAULT 0.5;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS max_ram_mb INTEGER NOT NULL DEFAULT 4096;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS max_cpu REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS max_disk_mb INTEGER NOT NULL DEFAULT 5120;
 
 -- ── Bots ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS bots (
@@ -44,11 +46,15 @@ CREATE TABLE IF NOT EXISTS bots (
     runtime         bot_runtime NOT NULL DEFAULT 'python',
     status          bot_status NOT NULL DEFAULT 'building',
     bot_path        TEXT NOT NULL,
-    ram_limit_mb    INTEGER NOT NULL DEFAULT 512,
-    cpu_limit       REAL NOT NULL DEFAULT 0.5,
+    ram_limit_mb    INTEGER NOT NULL DEFAULT 4096,
+    cpu_limit       REAL NOT NULL DEFAULT 1.0,
+    disk_limit_mb   INTEGER NOT NULL DEFAULT 5120,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Migration: add disk_limit_mb to bots if table already existed
+ALTER TABLE bots ADD COLUMN IF NOT EXISTS disk_limit_mb INTEGER NOT NULL DEFAULT 5120;
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_bots_user_id ON bots(user_id);

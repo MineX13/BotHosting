@@ -125,6 +125,8 @@ class ProcessService:
         bot_dir: Path,
         bot_token: str,
         runtime: str,
+        cpu_limit: float = 0.5,
+        disk_limit_mb: int = 1024,
     ) -> int:
         """Start a bot as a subprocess.
 
@@ -153,11 +155,29 @@ class ProcessService:
         stdout_log = open(log_dir / "stdout.log", "a", encoding="utf-8")
         stderr_log = open(log_dir / "stderr.log", "a", encoding="utf-8")
 
-        # Build command
-        if runtime == "python":
-            cmd = ["python3", entrypoint]
+        # Build command with OS-level sandboxing (Linux only)
+        if platform.system() != "Windows":
+            runner_script = bot_dir / "runner.sh"
+            
+            # CPU limit in %: cpu_limit * 100
+            cpu_pct = int(cpu_limit * 100)
+            if cpu_pct <= 0: cpu_pct = 50
+            
+            target_cmd = f"python3 {entrypoint}" if runtime == "python" else f"node {entrypoint}"
+            
+            # ulimit -f sets max file size in 512-byte blocks
+            disk_blocks = disk_limit_mb * 2048
+            
+            script_content = f"#!/bin/bash\nulimit -f {disk_blocks}\nexec cpulimit -l {cpu_pct} -- {target_cmd}\n"
+            runner_script.write_text(script_content, encoding="utf-8")
+            os.chmod(runner_script, 0o755)
+            
+            cmd = ["bash", "runner.sh"]
         else:
-            cmd = ["node", entrypoint]
+            if runtime == "python":
+                cmd = ["python3", entrypoint]
+            else:
+                cmd = ["node", entrypoint]
 
         # Environment: inherit + set token under all common env var names
         env = os.environ.copy()
@@ -266,10 +286,14 @@ class ProcessService:
         bot_dir: Path,
         bot_token: str,
         runtime: str,
+        cpu_limit: float = 0.5,
+        disk_limit_mb: int = 1024,
     ) -> int:
         """Restart a bot process (stop + start)."""
         await self.stop_process(container_name)
-        return await self.start_process(container_name, bot_dir, bot_token, runtime)
+        return await self.start_process(
+            container_name, bot_dir, bot_token, runtime, cpu_limit, disk_limit_mb
+        )
 
     # ── Get Status ───────────────────────────────────────────
 

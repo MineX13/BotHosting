@@ -90,6 +90,7 @@ async def update_user_limits(
     max_bots: Optional[int] = None,
     max_ram_mb: Optional[int] = None,
     max_cpu: Optional[float] = None,
+    max_disk_mb: Optional[int] = None,
 ) -> asyncpg.Record:
     """Update per-user resource limits. Only updates non-None values."""
     pool = get_pool()
@@ -111,6 +112,10 @@ async def update_user_limits(
             sets.append(f"max_cpu = ${idx}")
             params.append(max_cpu)
             idx += 1
+        if max_disk_mb is not None:
+            sets.append(f"max_disk_mb = ${idx}")
+            params.append(max_disk_mb)
+            idx += 1
 
         if not sets:
             return await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
@@ -120,7 +125,7 @@ async def update_user_limits(
         row = await conn.fetchrow(query, *params)
 
     logger.info("User limits updated", user_id=user_id,
-                max_bots=max_bots, max_ram_mb=max_ram_mb, max_cpu=max_cpu)
+                max_bots=max_bots, max_ram_mb=max_ram_mb, max_cpu=max_cpu, max_disk_mb=max_disk_mb)
     return row  # type: ignore[return-value]
 
 
@@ -128,11 +133,12 @@ async def get_user_limits(user_id: int) -> Dict[str, Any]:
     """Get per-user resource limits. Falls back to defaults if user not found."""
     user = await get_user(user_id)
     if user is None:
-        return {"max_bots": 3, "max_ram_mb": 512, "max_cpu": 0.5}
+        return {"max_bots": 3, "max_ram_mb": 4096, "max_cpu": 1.0, "max_disk_mb": 5120}
     return {
         "max_bots": user["max_bots"],
         "max_ram_mb": user["max_ram_mb"],
         "max_cpu": user["max_cpu"],
+        "max_disk_mb": user.get("max_disk_mb", 5120),
     }
 
 
@@ -147,8 +153,9 @@ async def create_bot(
     encrypted_token: bytes,
     runtime: str,
     bot_path: str,
-    ram_limit_mb: int = 512,
-    cpu_limit: float = 0.5,
+    ram_limit_mb: int = 4096,
+    cpu_limit: float = 1.0,
+    disk_limit_mb: int = 5120,
 ) -> asyncpg.Record:
     """Insert a new bot record and return it."""
     pool = get_pool()
@@ -156,12 +163,12 @@ async def create_bot(
         row = await conn.fetchrow(
             """
             INSERT INTO bots (user_id, name, container_name, encrypted_token,
-                              runtime, bot_path, ram_limit_mb, cpu_limit)
-            VALUES ($1, $2, $3, $4, $5::bot_runtime, $6, $7, $8)
+                              runtime, bot_path, ram_limit_mb, cpu_limit, disk_limit_mb)
+            VALUES ($1, $2, $3, $4, $5::bot_runtime, $6, $7, $8, $9)
             RETURNING *
             """,
             user_id, name, container_name, encrypted_token,
-            runtime, bot_path, ram_limit_mb, cpu_limit,
+            runtime, bot_path, ram_limit_mb, cpu_limit, disk_limit_mb
         )
     logger.info("Bot record created", bot_id=str(row["id"]), user_id=user_id)
     return row  # type: ignore[return-value]

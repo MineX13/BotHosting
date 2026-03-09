@@ -61,9 +61,9 @@ class Settings(BaseSettings):
 
     # ── Resource Limits ──────────────────────────────────────
     max_bots_per_user: int = Field(default=3, ge=1)
-    bot_ram_limit_mb: int = Field(default=512, ge=64)
-    bot_cpu_limit: float = Field(default=0.5, gt=0)
-    bot_disk_limit_mb: int = Field(default=1024, ge=100)
+    bot_ram_limit_mb: int = Field(default=4096, ge=64)
+    bot_cpu_limit: float = Field(default=1.0, gt=0)
+    bot_disk_limit_mb: int = Field(default=5120, ge=100)
     max_user_ram_mb: int = Field(default=1024, ge=256)
     max_zip_size_mb: int = Field(default=50, ge=1)
 

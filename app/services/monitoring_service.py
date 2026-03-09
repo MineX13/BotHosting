@@ -138,9 +138,38 @@ class MonitoringService:
 
         for bot in all_bots:
             try:
-                process_status = self._process.get_status(
-                    bot["container_name"]
-                )
+                bot_dir = Path(bot["bot_path"])
+                container_name = bot["container_name"]
+                
+                # 1. Enforce Disk Limit (Linux Only)
+                disk_limit = bot.get("disk_limit_mb", get_settings().bot_disk_limit_mb)
+                if platform.system() != "Windows" and bot_dir.exists():
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            "du", "-sm", str(bot_dir),
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE
+                        )
+                        stdout, _ = await proc.communicate()
+                        if proc.returncode == 0:
+                            size_mb_str_with_tab = stdout.decode().split("\t")[0]
+                            size_mb = int(size_mb_str_with_tab)
+                            if size_mb > disk_limit:
+                                logger.warning(
+                                    "Bot exceeded disk limit",
+                                    bot_id=str(bot["id"]),
+                                    size_mb=size_mb,
+                                    limit_mb=disk_limit
+                                )
+                                # Stop process and mark as error
+                                await self._process.stop_process(container_name)
+                                await db.update_bot_status(bot["id"], "error")
+                                continue  # Skip normal health check
+                    except Exception as exc:
+                        logger.error("Failed to check disk size", bot_id=str(bot["id"]), error=str(exc))
+
+                # 2. Check Process Status
+                process_status = self._process.get_status(container_name)
 
                 # Map process status to our status enum
                 if process_status == "running":
