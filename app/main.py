@@ -112,6 +112,9 @@ async def main() -> None:
     bot.deployment_service = deployment_service  # type: ignore[attr-defined]
     bot.monitoring_service = monitoring_service  # type: ignore[attr-defined]
     bot.boot_time = datetime.now(timezone.utc)   # type: ignore[attr-defined]
+    
+    # Inject bot into monitoring service for DMs
+    monitoring_service.bot = bot
 
     @bot.event
     async def on_ready():

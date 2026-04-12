@@ -16,6 +16,7 @@ from typing import Optional, TYPE_CHECKING
 
 import platform
 import psutil
+import discord
 
 from app.database import queries as db
 from app.security.encryption import decrypt_token
@@ -41,7 +42,9 @@ class MonitoringService:
         self._deploy = deployment_service
         self._health_task: Optional[asyncio.Task] = None
         self._memory_task: Optional[asyncio.Task] = None
+        self._purge_task: Optional[asyncio.Task] = None
         self._running = False
+        self.bot = None
 
     async def start(self) -> None:
         """Start all background monitoring tasks."""
@@ -60,6 +63,9 @@ class MonitoringService:
         )
         self._memory_task = asyncio.create_task(
             self._memory_monitor_loop(), name="memory_monitor"
+        )
+        self._purge_task = asyncio.create_task(
+            self._purge_countdown_loop(), name="purge_countdown"
         )
 
         logger.info("Monitoring service started")
@@ -112,7 +118,7 @@ class MonitoringService:
         """Cancel all background tasks."""
         self._running = False
 
-        for task in (self._health_task, self._memory_task):
+        for task in (self._health_task, self._memory_task, self._purge_task):
             if task is not None and not task.done():
                 task.cancel()
                 try:
@@ -228,6 +234,84 @@ class MonitoringService:
                 logger.error("Memory monitor error", error=str(exc))
 
             await asyncio.sleep(60)  # Check every minute
+
+    async def _purge_countdown_loop(self) -> None:
+        """Monitor the 29-day uptime limit. Backup and purge bots when time is up."""
+        from datetime import datetime, timezone, timedelta
+        import io
+        import zipfile
+        import shutil
+
+        while self._running:
+            try:
+                # Wait for bot to be ready and boot_time to be set
+                if self.bot is None or not hasattr(self.bot, "boot_time"):
+                    await asyncio.sleep(10)
+                    continue
+
+                uptime = datetime.now(timezone.utc) - self.bot.boot_time
+                if uptime >= timedelta(days=29):
+                    logger.critical("29-DAY PURGE DEADLINE REACHED. Executing mass-backup and purge sequence.")
+
+                    users = await db.list_all_bots()
+                    # Organise bots by user
+                    user_bots = {}
+                    for bot in users:
+                        uid = bot["user_id"]
+                        if uid not in user_bots:
+                            user_bots[uid] = []
+                        user_bots[uid].append(bot)
+
+                    for user_id, bots in user_bots.items():
+                        # Backup
+                        buf = io.BytesIO()
+                        try:
+                            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                                for b in bots:
+                                    bot_dir = Path(b["bot_path"])
+                                    if not bot_dir.exists():
+                                        continue
+                                    for file in bot_dir.rglob("*"):
+                                        if file.is_file() and file.name != "_upload.zip":
+                                            arcname = f"{b['name']}/{file.relative_to(bot_dir)}"
+                                            zf.write(file, arcname)
+
+                            buf.seek(0)
+                            if buf.getbuffer().nbytes > 22 and self.bot:
+                                try:
+                                    discord_user = await self.bot.fetch_user(user_id)
+                                    dm = await discord_user.create_dm()
+                                    file = discord.File(buf, filename=f"minenodes_backup_{user_id}.zip")
+                                    await dm.send(
+                                        "🚨 **29-Day Auto Purge** 🚨\n"
+                                        "Your bot has reached the 29-day hosting limit.\n"
+                                        "As requested, here is a full backup of all your bot files. Your bot has now been safely wiped.",
+                                        file=file,
+                                    )
+                                except Exception as exc:
+                                    logger.error("Failed to send backup to user", user_id=user_id, error=str(exc))
+                        except Exception as exc:
+                            logger.error("Failed to compile backup for user", user_id=user_id, error=str(exc))
+
+                        # Purge
+                        for b in bots:
+                            try:
+                                await self._process.stop_process(b["container_name"])
+                                bot_dir = Path(b["bot_path"])
+                                if bot_dir.exists():
+                                    shutil.rmtree(bot_dir, ignore_errors=True)
+                                await db.delete_bot(b["id"])
+                                logger.info("Bot fully purged", bot_id=str(b["id"]))
+                            except Exception as exc:
+                                logger.error("Purge failure", bot_id=str(b["id"]), error=str(exc))
+                    
+                    logger.critical("Purge Sequence Complete ✅")
+                    # Stop the loop; it only needs to happen once per 29 days
+                    break
+            except Exception as exc:
+                logger.error("Purge loop error", error=str(exc))
+
+            await asyncio.sleep(60 * 60)  # Check once per hour
 
     # ── System Stats ─────────────────────────────────────────
 

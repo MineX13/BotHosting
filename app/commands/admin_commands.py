@@ -444,6 +444,25 @@ class AdminCommands(commands.Cog):
                     inline=True,
                 )
 
+            # Purge Countdown
+            boot_time = getattr(self.bot, "boot_time", None)
+            if boot_time:
+                from datetime import datetime, timezone, timedelta
+                delta = datetime.now(timezone.utc) - boot_time
+                time_left = timedelta(days=29) - delta
+                if time_left.total_seconds() <= 0:
+                    purge_str = "⚠️ Purging..."
+                else:
+                    pd = time_left.days
+                    ph, pr = divmod(time_left.seconds, 3600)
+                    pm, _ = divmod(pr, 60)
+                    purge_str = f"{pd}d {ph}h {pm}m"
+                embed.add_field(
+                    name="🔥 Auto Purge In",
+                    value=purge_str,
+                    inline=True,
+                )
+
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as exc:

@@ -370,6 +370,20 @@ class UserCommands(commands.Cog):
                 value="Online" if latency_ms < 500 else "Degraded",
                 inline=True,
             )
+            
+            # Purge Countdown
+            if boot_time:
+                from datetime import timedelta
+                time_left = timedelta(days=29) - delta
+                if time_left.total_seconds() <= 0:
+                    purge_str = "Purging..."
+                else:
+                    pd = time_left.days
+                    ph, premainder = divmod(time_left.seconds, 3600)
+                    pm, ps = divmod(premainder, 60)
+                    purge_str = f"{pd}d {ph}h {pm}m"
+                embed.add_field(name="Auto Purge In", value=purge_str, inline=True)
+
             embed.set_footer(text="MineNodes Bot Hoster")
             await interaction.followup.send(embed=embed)
 
