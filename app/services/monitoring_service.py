@@ -20,6 +20,7 @@ from app.database import queries as db
 from app.security.encryption import decrypt_token
 from app.services.process_service import ProcessService
 from app.utils.logging import get_logger
+from app.config.settings import get_settings
 
 if TYPE_CHECKING:
     from app.services.deployment_service import DeploymentService
