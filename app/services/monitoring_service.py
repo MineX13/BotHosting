@@ -14,6 +14,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
+import platform
 import psutil
 
 from app.database import queries as db
