@@ -168,7 +168,7 @@ class ProcessService:
             # ulimit -f sets max file size in 512-byte blocks
             disk_blocks = disk_limit_mb * 2048
             
-            script_content = f"#!/bin/bash\nulimit -f {disk_blocks}\nexec cpulimit -l {cpu_pct} -- {target_cmd}\n"
+            script_content = f"#!/bin/bash\nulimit -f {disk_blocks}\nexec {target_cmd}\n"
             runner_script.write_text(script_content, encoding="utf-8")
             os.chmod(runner_script, 0o755)
             
