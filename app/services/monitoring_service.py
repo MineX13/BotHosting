@@ -196,11 +196,9 @@ class MonitoringService:
                     )
 
             except Exception as exc:
-                logger.warning(
-                    "Health check failed for bot",
-                    bot_id=str(bot["id"]),
-                    error=str(exc),
-                )
+                import traceback
+                error_trace = traceback.format_exc()
+                logger.warning(f"Health check failed for bot {bot['id']}: {error_trace}")
 
     # ── Memory Monitoring ────────────────────────────────────
 
