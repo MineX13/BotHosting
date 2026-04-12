@@ -34,3 +34,7 @@ redis_data/
 
 # Uploads (temp)
 */_upload.zip
+
+# Node / Frontend
+node_modules/
+panel/frontend/dist/

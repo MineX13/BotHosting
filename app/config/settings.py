@@ -33,6 +33,14 @@ class Settings(BaseSettings):
         description="Primary admin Discord user ID",
     )
 
+    # ── Discord OAuth2 (for web panel) ───────────────────────
+    discord_client_id: str = Field(default="", description="Discord OAuth2 client ID")
+    discord_client_secret: str = Field(default="", description="Discord OAuth2 client secret")
+
+    # ── Web Panel ────────────────────────────────────────────
+    panel_secret_key: str = Field(default="change-me-to-a-random-secret", description="JWT signing key")
+    panel_port: int = Field(default=8080, ge=1, le=65535)
+
     # ── Database ─────────────────────────────────────────────
     database_url: str = Field(
         default="postgresql://controller:securepassword@localhost:5432/bot_hosting",
