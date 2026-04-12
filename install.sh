@@ -10,7 +10,7 @@ echo "============================================="
 # 1. Install System Dependencies
 echo ">>> [1/4] Installing system dependencies (PostgreSQL, Redis, Python)..."
 sudo apt-get update -y
-sudo apt-get install -y postgresql postgresql-contrib redis-server python3 python3-pip python3-venv
+sudo apt-get install -y cpulimit postgresql postgresql-contrib redis-server python3 python3-pip python3-venv
 
 # 2. Start and Enable Background Services
 echo ">>> [2/4] Starting Redis and PostgreSQL services..."
