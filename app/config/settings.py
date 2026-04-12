@@ -15,12 +15,15 @@ from typing import Optional
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ROOT_DIR = Path(__file__).parent.parent.parent
+CONFIG_ENV_PATH = ROOT_DIR / "config.env"
+
 
 class Settings(BaseSettings):
     """Central configuration loaded from .env / environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(CONFIG_ENV_PATH),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
