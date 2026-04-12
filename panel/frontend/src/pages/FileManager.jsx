@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import api from '../api'
@@ -35,6 +35,7 @@ export default function FileManager() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newName, setNewName] = useState('')
   const [newIsDir, setNewIsDir] = useState(false)
+  const uploadRef = useRef(null)
 
   const showToast = (msg, type = 'info') => {
     setToast({ msg, type })
@@ -112,6 +113,23 @@ export default function FileManager() {
     }
   }
 
+  const uploadFiles = async (fileList) => {
+    if (!fileList || fileList.length === 0) return
+    const formData = new FormData()
+    for (const f of fileList) {
+      formData.append('files', f)
+    }
+    try {
+      const res = await api.post(`/bots/${id}/files/upload?path=${encodeURIComponent(currentPath)}`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      showToast(`Uploaded ${res.data.count} file(s)`, 'success')
+      fetchFiles()
+    } catch (err) {
+      showToast(err.response?.data?.detail || 'Upload failed', 'error')
+    }
+  }
+
   const goUp = () => {
     if (currentPath === '/' || currentPath === '') return
     const parts = currentPath.split('/')
@@ -136,6 +154,7 @@ export default function FileManager() {
           <button className="btn btn-sm btn-secondary" onClick={() => navigate(`/bot/${id}`)}>← Console</button>
           <button className="btn btn-sm btn-primary" onClick={() => { setNewIsDir(false); setNewName(''); setShowCreateModal(true) }}>+ New File</button>
           <button className="btn btn-sm btn-secondary" onClick={() => { setNewIsDir(true); setNewName(''); setShowCreateModal(true) }}>+ New Folder</button>
+          <button className="btn btn-sm btn-success" onClick={() => uploadRef.current?.click()}>📤 Upload Files</button>
         </div>
       </div>
 
@@ -234,6 +253,9 @@ export default function FileManager() {
           </div>
         </div>
       )}
+
+      {/* Hidden upload input */}
+      <input ref={uploadRef} type="file" multiple hidden onChange={(e) => { uploadFiles(e.target.files); e.target.value = '' }} />
 
       {toast && <div className={`toast ${toast.type}`}>{toast.msg}</div>}
     </div>

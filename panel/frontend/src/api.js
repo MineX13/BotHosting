@@ -1,7 +1,11 @@
 import axios from 'axios'
 
+// When hosting frontend on Vercel, set VITE_API_URL to your VPS backend URL
+// e.g. VITE_API_URL=https://your-vps-ip:8080/api
+const API_BASE = import.meta.env.VITE_API_URL || '/api'
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE,
   timeout: 30000,
 })
 
