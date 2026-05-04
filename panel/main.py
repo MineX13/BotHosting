@@ -116,12 +116,12 @@ def create_app() -> FastAPI:
     )
 
     # API routes
-    app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
-    app.include_router(account.router, prefix="/api", tags=["account"])
-    app.include_router(bots.router, prefix="/api", tags=["bots"])
-    app.include_router(files.router, prefix="/api", tags=["files"])
-    app.include_router(env.router, prefix="/api", tags=["env"])
-    app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+    app.include_router(auth_router, prefix="/panel-api/auth", tags=["auth"])
+    app.include_router(account.router, prefix="/panel-api", tags=["account"])
+    app.include_router(bots.router, prefix="/panel-api", tags=["bots"])
+    app.include_router(files.router, prefix="/panel-api", tags=["files"])
+    app.include_router(env.router, prefix="/panel-api", tags=["env"])
+    app.include_router(admin.router, prefix="/panel-api/admin", tags=["admin"])
 
     # Serve React build in production
     frontend_dist = Path(__file__).parent / "frontend" / "dist"
