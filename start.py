@@ -12,7 +12,15 @@ def start_process(command, name, env_vars=None):
     return subprocess.Popen(command, env=env)
 
 def main():
-    print(f"Starting MineNodes — Full Stack Mode...")
+    hosting_name = "MineNodes"
+    if os.path.exists("config.env"):
+        with open("config.env", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("HOSTING_NAME="):
+                    hosting_name = line.strip().split("=", 1)[1]
+                    break
+                    
+    print(f"Starting {hosting_name} — Full Stack Mode...")
     print("System made by MineX13")
     print("yt https://www.youtube.com/@minexz13")
     print("github https://github.com/MineX13")
