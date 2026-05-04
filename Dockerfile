@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     python3 python3-pip python3-dev \
     build-essential libffi-dev libssl-dev libzmq3-dev \
     ca-certificates curl wget nginx git tmux neofetch \
-    ttyd \
+    ttyd sudo postgresql postgresql-contrib redis-server \
     # Playwright Chromium dependencies
     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
     libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
@@ -135,6 +135,14 @@ EOF
 RUN cat <<'EOF' > /start.sh
 #!/bin/bash
 
+# Start PostgreSQL and initialize Database if missing
+/etc/init.d/postgresql start
+# Wait for postgres to be ready
+sleep 2
+sudo -u postgres psql -c "CREATE USER \"user\" WITH PASSWORD 'password';" || true
+sudo -u postgres psql -c "ALTER USER \"user\" WITH SUPERUSER;" || true
+sudo -u postgres createdb -O "user" bot_hosting || true
+
 # Start JupyterLab (rooted at /captcha so it opens there by default)
 jupyter lab \
   --ip=0.0.0.0 \
@@ -144,7 +152,7 @@ jupyter lab \
   --ServerApp.token='' \
   --ServerApp.allow_origin='*' \
   --ServerApp.base_url='/' \
-  --ServerApp.root_dir='/captcha' &
+  --ServerApp.root_dir='/' &
 
 # Start ttyd web terminal at /cap, working directory /captcha
 ttyd \
