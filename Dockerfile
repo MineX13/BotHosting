@@ -28,8 +28,27 @@ RUN python3 -m pip install fastapi uvicorn "pydantic-settings" asyncpg redis log
 # Create /captcha folder (shared workspace)
 # ------------------------------------------------
 RUN mkdir -p /captcha
-# Create dir for the panel code
+# ------------------------------------------------
+# Create dir for the panel code & copy project files
+# ------------------------------------------------
 RUN mkdir -p /app
+WORKDIR /app
+# We need to copy the files early so npm run build can find them if this is built by Railway.
+# Note: Railway copies all files automatically, but local Docker builds need a copy command.
+# For Railway Nixpacks/Docker, everything is at /app.
+
+# ------------------------------------------------
+# Install Node.js & Build Frontend
+# ------------------------------------------------
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs
+
+# Copy all local project files into /app
+COPY . /app/
+
+# Build the frontend explicitly inside the Docker container
+RUN cd /app/panel/frontend && npm install && npm run build
+
 
 # ------------------------------------------------
 # Improve bash experience
