@@ -772,6 +772,24 @@ class UserCommands(commands.Cog):
             logger.error("Error in view_logs", error=str(exc), exc_info=True)
             await interaction.followup.send("Something went wrong.", ephemeral=True)
 
+    # ── /credit ──────────────────────────────────────────────
+
+    @app_commands.command(name="credit", description="View creator credits")
+    @not_suspended()
+    @rate_limit_check()
+    async def credit(self, interaction: discord.Interaction) -> None:
+        embed = discord.Embed(
+            title="Credits - MineNodes Bot Hoster",
+            description="System made by MineX13",
+            color=0x2b2d31,
+        )
+        embed.add_field(name="YouTube", value="[MineX13](https://www.youtube.com/@minexz13)", inline=False)
+        embed.add_field(name="GitHub", value="[MineX13](https://github.com/MineX13)", inline=False)
+        embed.add_field(name="Discord Profile", value="minex.13.", inline=False)
+        embed.add_field(name="Discord Server", value="[Join Here](https://discord.gg/n3Ed8zbduQ)", inline=False)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     # ── Error Handler ────────────────────────────────────────
 
     async def cog_app_command_error(

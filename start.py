@@ -12,7 +12,13 @@ def start_process(command, name, env_vars=None):
     return subprocess.Popen(command, env=env)
 
 def main():
-    print("Starting MineNodes — Full Stack Mode...")
+    print(f"Starting MineNodes — Full Stack Mode...")
+    print("System made by MineX13")
+    print("yt https://www.youtube.com/@minexz13")
+    print("github https://github.com/MineX13")
+    print("discord profile minex.13.")
+    print("dc server https://discord.gg/n3Ed8zbduQ")
+    print("-" * 40)
     
     processes = []
     

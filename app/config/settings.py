@@ -29,6 +29,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # ── Brand ──────────────────────────────────────────────
+    hosting_name: str = Field(default="MineNodes", description="Custom name for the hosting platform")
+
     # ── Discord ──────────────────────────────────────────────
     discord_bot_token: str = Field(..., description="Controller bot token")
     admin_user_id: int = Field(
