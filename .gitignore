@@ -11,8 +11,8 @@ dist/
 build/
 
 # Environment
-.env
-!.env.example
+config.env
+!config.env.example
 
 # Logs
 *.log
